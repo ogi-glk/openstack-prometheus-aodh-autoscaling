@@ -1,5 +1,9 @@
 # OpenStack Prometheus Autoscaling Layer
 
+[Türkçe](README.md) | [English](README.en.md)
+
+---
+
 OpenStack ortamlarında Ceilometer, Gnocchi ve Aodh servisleri yerine **Prometheus + Alertmanager + libvirt-exporter** mimarisi kullanılarak CPU tabanlı otomatik ölçekleme (AutoScaling) yapılmasını sağlayan entegrasyon katmanıdır.
 
 ---
