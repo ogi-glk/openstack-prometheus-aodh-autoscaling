@@ -1,0 +1,15 @@
+[Unit]
+Description=Alertmanager to OpenStack Heat Signal Adapter
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/openstack-bridge
+EnvironmentFile=/root/openrc
+ExecStart=/opt/openstack-bridge/venv/bin/python3 /opt/openstack-bridge/adapter/heat_signal_adapter.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

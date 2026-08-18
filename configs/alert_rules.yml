@@ -1,0 +1,28 @@
+groups:
+  - name: openstack_autoscaling
+    rules:
+      - alert: CpuHigh
+        expr: >
+          avg by (server_group) (
+            rate(libvirt_domain_info_cpu_time_seconds_total[5m]) 
+            * on(domain) group_left(server_group) 
+            openstack_instance_server_group
+          ) > 0.70
+        for: 0m
+        labels:
+          severity: high
+        annotations:
+          summary: "Stack {{ $labels.server_group }} ortalama CPU > %70 -> Scale-Out tetikleniyor"
+
+      - alert: CpuLow
+        expr: >
+          avg by (server_group) (
+            rate(libvirt_domain_info_cpu_time_seconds_total[5m]) 
+            * on(domain) group_left(server_group) 
+            openstack_instance_server_group
+          ) < 0.20
+        for: 0m
+        labels:
+          severity: low
+        annotations:
+          summary: "Stack {{ $labels.server_group }} ortalama CPU < %20 -> Scale-In tetikleniyor"

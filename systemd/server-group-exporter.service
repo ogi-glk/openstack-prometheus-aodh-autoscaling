@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenStack Server Group Exporter (Prometheus Bridge)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/openstack-bridge
+EnvironmentFile=/root/openrc
+ExecStart=/opt/openstack-bridge/venv/bin/python3 /opt/openstack-bridge/exporters/server_group_exporter.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
