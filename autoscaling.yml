@@ -8,5 +8,8 @@
 - name: Deploy OpenStack Prometheus Autoscaling Layer
   hosts: "{{ autoscaling_target_hosts | default('compute_hosts') }}"
   become: true
+  vars_files:
+    - /etc/openstack_deploy/user_secrets.yml
+    - /etc/openstack_deploy/user_variables.yml
   roles:
     - role: "{{ playbook_dir }}"
