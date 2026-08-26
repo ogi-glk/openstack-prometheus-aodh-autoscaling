@@ -9,6 +9,7 @@ Group={{ autoscaling_service_group }}
 WorkingDirectory={{ autoscaling_install_dir }}
 EnvironmentFile={{ autoscaling_install_dir }}/openrc
 Environment="EXPORTER_PORT={{ server_group_exporter_port }}"
+Environment="CACHE_TTL={{ server_group_exporter_cache_ttl | default(60) }}"
 ExecStart={{ autoscaling_venv_dir }}/bin/python3 {{ autoscaling_install_dir }}/exporters/server_group_exporter.py
 Restart=always
 RestartSec=5

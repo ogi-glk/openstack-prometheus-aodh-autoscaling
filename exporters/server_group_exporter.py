@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-OpenStack Nova Metadata -> Prometheus Metric Exporter (Background Thread Worker)
---------------------------------------------------------------------------------
-Polls Nova API in a background thread every 15s so HTTP scrapes are instant (<1ms).
+OpenStack Nova Metadata -> Prometheus Metric Exporter (TTL Caching Background Worker)
+-------------------------------------------------------------------------------------
+Polls Nova API in a background thread every CACHE_TTL seconds (default: 60s)
+to minimize Nova API overhead by 75%, while serving Prometheus HTTP scrapes
+instantly (<1ms) from in-memory RAM cache.
 Exposes `openstack_instance_server_group` gauge on :9102/metrics.
 """
 
@@ -12,12 +14,13 @@ import threading
 import openstack
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-LISTEN_PORT = 9102
+LISTEN_PORT = int(os.environ.get("EXPORTER_PORT", 9102))
+CACHE_TTL = int(os.environ.get("CACHE_TTL", 60))
 CACHE_DATA = "# HELP openstack_instance_server_group Nova instance to Heat stack_id (server_group) mapping\n# TYPE openstack_instance_server_group gauge\n"
 RUNNING = True
 
 def poll_nova_loop():
-    """Continuously refreshes instance list in the background."""
+    """Periodically refreshes instance list in background every CACHE_TTL seconds."""
     global CACHE_DATA
     while RUNNING:
         try:
@@ -53,7 +56,7 @@ def poll_nova_loop():
             CACHE_DATA = "\n".join(lines)
         except Exception:
             pass
-        time.sleep(15)
+        time.sleep(CACHE_TTL)
 
 class MetricsHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -79,13 +82,12 @@ class MetricsHandler(BaseHTTPRequestHandler):
         pass
 
 def run():
-    # Start background polling thread
+    print(f"[*] Nova Server Group Exporter starting (CACHE_TTL={CACHE_TTL}s, Port={LISTEN_PORT})...", flush=True)
     worker = threading.Thread(target=poll_nova_loop, daemon=True)
     worker.start()
 
     server_address = ("0.0.0.0", LISTEN_PORT)
     httpd = HTTPServer(server_address, MetricsHandler)
-    print(f"[*] Nova Server Group Exporter listening on http://0.0.0.0:{LISTEN_PORT}/metrics")
     httpd.serve_forever()
 
 if __name__ == "__main__":

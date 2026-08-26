@@ -15,9 +15,9 @@ prometheus_version: "2.51.0"
 prometheus_port: 9090
 alertmanager_version: "0.27.0"
 alertmanager_port: 9093
-libvirt_exporter_version: "0.3.0"
 libvirt_exporter_port: 9177
 server_group_exporter_port: 9102
+server_group_exporter_cache_ttl: 60    # Background thread refreshes Nova metadata once every 60s
 heat_signal_adapter_port: 9200
 
 # 3. Autoscaling Thresholds and Evaluation Rules
@@ -34,7 +34,7 @@ openstack_project_name: "admin"
 openstack_user_domain_name: "Default"
 openstack_project_domain_name: "Default"
 
-# 5. Heat Stack and Webhook URLs (Auto-discovered or Manually Specified)
+# 5. Heat Stack and Webhook Configuration
 heat_stack_name: "autoscaling-stack"
 heat_scaleup_url: ""
 heat_scaledown_url: ""
