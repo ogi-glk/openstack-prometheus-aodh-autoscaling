@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Alertmanager -> OpenStack Native Heat Multi-Stack Signal Adapter
----------------------------------------------------------------
-Dynamically routes webhook alerts to the exact Heat Stack matching
-the alert's `server_group` label. Supports unlimited parallel stacks!
+Alertmanager -> OpenStack Native Heat Universal Multi-Metric & Auto-Healing Adapter
+-----------------------------------------------------------------------------------
+Dynamically routes webhook alerts to OpenStack Heat stacks and resources.
+Supports:
+  1. Label-driven dynamic routing (`target_resource`, `action`)
+  2. Built-in fallback action map (CPU, RAM, Network, Auto-Healing)
+  3. Multi-stack dynamic routing by `server_group` UUID
 """
 
 import os
@@ -14,6 +17,24 @@ import openstack
 
 LISTEN_PORT = int(os.environ.get("ADAPTER_PORT", 9200))
 DEFAULT_STACK = os.environ.get("HEAT_STACK_NAME", "autoscaling-stack")
+
+# Fallback Action Map: Used when alert does not explicitly provide `target_resource` label
+FALLBACK_ACTION_MAP = {
+    # Scale-Out (+1 VM)
+    "CpuHigh":            {"resource": "scaleup_policy", "action": "signal"},
+    "MemoryHigh":         {"resource": "scaleup_policy", "action": "signal"},
+    "NetworkTrafficHigh": {"resource": "scaleup_policy", "action": "signal"},
+    "HttpRequestHigh":    {"resource": "scaleup_policy", "action": "signal"},
+
+    # Scale-In (-1 VM)
+    "CpuLow":             {"resource": "scaledown_policy", "action": "signal"},
+    "MemoryLow":          {"resource": "scaledown_policy", "action": "signal"},
+
+    # Auto-Healing (Mark unhealthy and replace)
+    "InstanceCrashed":    {"resource": "asg", "action": "autoheal"},
+    "InstanceDown":       {"resource": "asg", "action": "autoheal"},
+    "PingFailed":         {"resource": "asg", "action": "autoheal"},
+}
 
 def get_openstack_conn():
     auth_url = os.environ.get("OS_AUTH_URL")
@@ -28,8 +49,8 @@ def get_openstack_conn():
         )
     return openstack.connect(cloud="envvars")
 
-def signal_heat_resource(stack_identifier, resource_name):
-    """Signals Heat ScalingPolicy dynamically by stack ID or stack name."""
+def signal_heat_resource(stack_identifier, resource_name, action="signal", extra_payload=None):
+    """Signals Heat ScalingPolicy or AutoScalingGroup dynamically by stack ID or stack name."""
     conn = get_openstack_conn()
     stack = conn.orchestration.find_stack(stack_identifier)
     if not stack:
@@ -38,7 +59,17 @@ def signal_heat_resource(stack_identifier, resource_name):
         raise ValueError(f"Target stack '{stack_identifier}' not found in OpenStack")
 
     endpoint = f"/stacks/{stack.name}/{stack.id}/resources/{resource_name}/signal"
-    resp = conn.orchestration.post(endpoint)
+
+    post_body = {}
+    if action == "autoheal":
+        post_body = {
+            "mark_unhealthy": True,
+            "reason": (extra_payload or {}).get("reason", "Prometheus alert triggered autoheal")
+        }
+        if extra_payload and extra_payload.get("resource_name"):
+            post_body["resource_name"] = extra_payload["resource_name"]
+
+    resp = conn.orchestration.post(endpoint, json=post_body if post_body else None)
     return stack.name, resp.status_code if hasattr(resp, 'status_code') else 200
 
 class Handler(BaseHTTPRequestHandler):
@@ -56,27 +87,56 @@ class Handler(BaseHTTPRequestHandler):
             if alert.get("status") != "firing":
                 continue
             
-            alertname = alert.get("labels", {}).get("alertname")
-            target_stack = alert.get("labels", {}).get("server_group") or DEFAULT_STACK
-            resource_name = "scaleup_policy" if alertname == "CpuHigh" else "scaledown_policy" if alertname == "CpuLow" else None
-            
-            if not resource_name or target_stack == "unknown":
+            labels = alert.get("labels", {})
+            alertname = labels.get("alertname", "")
+            target_stack = labels.get("server_group") or DEFAULT_STACK
+
+            if target_stack == "unknown":
                 continue
 
+            # 1. Label-driven priority: check if Prometheus alert specified target_resource
+            target_resource = labels.get("target_resource")
+            action = labels.get("action")
+
+            # 2. Fallback to Action Map if not in labels
+            if not target_resource and alertname in FALLBACK_ACTION_MAP:
+                mapping = FALLBACK_ACTION_MAP[alertname]
+                target_resource = mapping["resource"]
+                action = action or mapping["action"]
+
+            if not target_resource:
+                print(f"[*] IGNORED: Alert '{alertname}' has no matching target resource. Skipping.", flush=True)
+                continue
+
+            action = action or "signal"
+            extra_payload = {
+                "reason": alert.get("annotations", {}).get("summary", f"Alert {alertname} fired"),
+                "resource_name": labels.get("instance_id") or labels.get("domain")
+            }
+
             try:
-                stack_name, status = signal_heat_resource(target_stack, resource_name)
-                print(f"[+] SUCCESS: {alertname} -> Stack '{stack_name}' ({target_stack}) / Resource '{resource_name}' triggered (HTTP {status})", flush=True)
+                stack_name, status = signal_heat_resource(target_stack, target_resource, action=action, extra_payload=extra_payload)
+                print(f"[+] SUCCESS: {alertname} (Action: {action}) -> Stack '{stack_name}' ({target_stack}) / Resource '{target_resource}' triggered (HTTP {status})", flush=True)
             except Exception as e:
-                print(f"[!] ERROR: Failed to forward {alertname} signal to stack {target_stack}: {e}", flush=True)
+                print(f"[!] ERROR: Failed to forward {alertname} to stack {target_stack}: {e}", flush=True)
 
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b'{"status": "ok"}')
 
+    def do_GET(self):
+        if self.path == "/healthz" or self.path == "/":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def log_message(self, format, *args):
         return
 
 if __name__ == "__main__":
-    print(f"[*] Multi-Stack Native Heat Signal Adapter listening on port :{LISTEN_PORT}...", flush=True)
+    print(f"[*] Universal Multi-Metric & Auto-Healing Heat Signal Adapter listening on port :{LISTEN_PORT}...", flush=True)
     server = HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
     server.serve_forever()
