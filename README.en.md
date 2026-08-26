@@ -4,13 +4,15 @@
 
 ---
 
-An enterprise integration layer providing CPU-based autoscaling for OpenStack environments using a lightweight **Prometheus + Alertmanager + libvirt-exporter** architecture instead of legacy Ceilometer, Gnocchi, and Aodh services.
+An integration layer providing CPU-based autoscaling for OpenStack environments using a lightweight **Prometheus + Alertmanager + libvirt-exporter** architecture instead of legacy Ceilometer, Gnocchi, and Aodh services.
 
-This project can be deployed either **manually via a standalone bash script (`setup.sh`)** or **fully automated as an official OpenStack-Ansible role (`autoscaling.yml`) with dynamic Jinja2 templating**.
+The project can be deployed in two ways:
+1. **Via Ansible Role:** Automated deployment across inventory hosts using `openstack-ansible` or standard `ansible-playbook`.
+2. **Standalone / Manual:** Direct installation on the target host using `setup.sh` or step-by-step commands.
 
 ---
 
-## 🏛️ Architecture & Operational Workflow
+## Architecture and Operating Logic
 
 ```text
 ┌─────────────────┐       ┌────────────────────────┐
@@ -39,112 +41,108 @@ This project can be deployed either **manually via a standalone bash script (`se
 ```
 
 ### Components:
-1. **libvirt-exporter (:9177):** Collects raw CPU time metrics directly from KVM/libvirt for each running VM.
-2. **server-group-exporter (:9102):** Connects to Nova API to map instance domain names to Heat Stack IDs (`metering.server_group`). Features a 60-second TTL cache to prevent API overhead.
-3. **Prometheus (:9090):** Combines both data streams using PromQL vector matching on the `domain` label and evaluates cluster-wide average CPU utilization.
-4. **Alertmanager (:9093):** Evaluates firing conditions and dispatches webhook payloads to the local adapter.
-5. **heat_signal_adapter (:9200):** Receives the webhook alert, obtains a fresh Keystone auth token, and dispatches an authenticated HTTP POST signal to Heat's scaling policy URL.
+1. **libvirt-exporter (:9177):** Collects raw CPU time metrics directly from KVM/libvirt for running instances.
+2. **server-group-exporter (:9102):** Connects to Nova API to map instance domain names to Heat Stack IDs (`metering.server_group`). Features a 60-second TTL cache to minimize Nova API load.
+3. **Prometheus (:9090):** Combines both data streams using PromQL vector matching on the `domain` label and calculates average CPU utilization.
+4. **Alertmanager (:9093):** Evaluates firing conditions and routes webhook payloads to the local adapter.
+5. **heat_signal_adapter (:9200):** Receives the webhook alert, obtains a valid Keystone auth token, and dispatches an authenticated HTTP POST signal to Heat's scaling policy URL.
 
 ---
 
-## 📂 Project & Ansible Role Directory Structure
-
-The project is structured both as a standalone application and as an official **Ansible Role**:
+## Directory Structure
 
 ```text
 openstack-prometheus-autoscaling/
-├── autoscaling.yml                    # Turnkey Ansible Playbook for instant deployment
-├── setup.sh                           # Standalone Bash installation script
-├── requirements.txt                   # Python dependencies (openstacksdk, prometheus-client)
+├── autoscaling.yml                    # Deployment Ansible Playbook
+├── setup.sh                           # Standalone installation script
+├── requirements.txt                   # Python package dependencies
 │
-├── defaults/                          # [Ansible Role] User-configurable parameters
-│   └── main.yml                       # (CPU thresholds, ports, evaluation intervals)
+├── defaults/                          # Role variables
+│   └── main.yml                       # Thresholds, ports, and parameters
 │
-├── tasks/                             # [Ansible Role] Automation tasks
-│   ├── main.yml                       # Master task orchestrator
-│   ├── prerequisites.yml              # Directories, system tools, and isolated Python venv
-│   ├── prometheus.yml                 # Prometheus & Alertmanager binaries & configuration
+├── tasks/                             # Ansible task files
+│   ├── main.yml                       # Task execution entry point
+│   ├── prerequisites.yml              # Directories, system packages, and Python venv
+│   ├── prometheus.yml                 # Prometheus and Alertmanager setup
 │   └── adapter.yml                    # Adapter, exporter, and systemd service deployment
 │
-├── templates/                         # [Ansible Role] Dynamic Jinja2 (.j2) templates
-│   ├── openrc.j2                      # Dynamic Keystone credentials template
-│   ├── alert_rules.yml.j2             # Compiled PromQL alert rules based on thresholds
-│   ├── alertmanager.yml.j2            # Dynamic webhook routing template
-│   ├── prometheus.yml.j2              # Dynamic hypervisor scrape targets template
-│   ├── heat-signal-adapter.service.j2 # Systemd service with auto-discovered Webhook URLs
+├── templates/                         # Jinja2 (.j2) configuration templates
+│   ├── openrc.j2                      # Keystone credentials template
+│   ├── alert_rules.yml.j2             # PromQL alert rules template
+│   ├── alertmanager.yml.j2            # Webhook routing template
+│   ├── prometheus.yml.j2              # Prometheus scrape targets template
+│   ├── heat-signal-adapter.service.j2 # Systemd adapter service template
 │   └── server-group-exporter.service.j2
 │
-├── handlers/                          # [Ansible Role] Service restart handlers
+├── handlers/                          # Service restart handlers
 │   └── main.yml
 │
-├── meta/                              # [Ansible Role] Galaxy compatibility metadata
+├── meta/                              # Ansible Galaxy metadata
 │   └── main.yml
 │
-├── exporters/                         # Pure Python Source Code
+├── exporters/                         # Python source code
 │   └── server_group_exporter.py       # Nova Metadata -> Prometheus exporter (:9102)
 │
-├── adapter/                           # Pure Python Source Code
-│   └── heat_signal_adapter.py         # Alertmanager -> Heat API token bridge (:9200)
+├── adapter/                           # Python source code
+│   └── heat_signal_adapter.py         # Alertmanager -> Heat API token adapter (:9200)
 │
-├── configs/                           # Reference / Static Configuration Files (Manual Setup)
+├── configs/                           # Reference configuration files (Manual installation)
 │   ├── prometheus.yml
 │   ├── alert_rules.yml
 │   └── alertmanager.yml
 │
-└── systemd/                           # Reference Systemd Unit Files (Manual Setup)
+└── systemd/                           # Reference systemd service files (Manual installation)
     ├── server-group-exporter.service
     └── heat-signal-adapter.service
 ```
 
 ---
 
-## ⚙️ Dynamic Variables & Jinja2 Templating Matrix
+## Variables and Parameters
 
-When deploying via the Ansible Role, zero manual IP or password editing is required. Jinja2 dynamically resolves all infrastructure endpoints:
+When using the Ansible Role, variables are defined in `defaults/main.yml`:
 
-| Parameter / Field | Manual Installation Mode | Ansible Role (Dynamic Jinja2) | Description |
-| :--- | :--- | :--- | :--- |
-| **`OS_AUTH_URL`** | Hardcoded in `openrc` | `https://{{ external_lb_vip_address }}:5000/v3` | Automatically bound to Keystone endpoint |
-| **`OS_PASSWORD`** | Manually entered | `{{ keystone_auth_admin_password }}` | Safely injected from credentials vault |
-| **`HEAT_SCALEUP_URL`** | Copied manually from terminal | `heat_scaleup_url` (Auto-discovered via Heat API) | Discovered dynamically from stack outputs |
-| **`CPU_HIGH_LIMIT`** | Static threshold (70%) | `{{ autoscaling_cpu_high_threshold }}` | Controlled centrally in `defaults/main.yml` |
-| **`Prometheus Targets`**| Static localhost | `{% for host in groups['compute_hosts'] %}` | Dynamically scrapes all compute hypervisors |
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `autoscaling_cpu_high_threshold` | `70` | Scale-Out trigger threshold (% CPU) |
+| `autoscaling_cpu_low_threshold` | `20` | Scale-In trigger threshold (% CPU) |
+| `autoscaling_evaluation_period` | `60s` | Evaluation wait time before firing |
+| `heat_signal_adapter_port` | `9200` | Heat adapter listening port |
+| `server_group_exporter_port` | `9102` | Metadata exporter listening port |
+| `heat_stack_name` | `autoscaling-stack` | Heat Stack name for automatic signal URL discovery |
 
 ---
 
-## 🚀 Deployment Methods
+## Installation Methods
 
-### Method 1: Automated Deployment via Ansible Role (Recommended / Enterprise)
+### 1. Deployment via Ansible Role
 
-Deploy to all target hosts with a single command from your Deployer or Ansible controller:
+From your Ansible control machine:
 
 ```bash
 # 1. Clone the repository
 git clone https://github.com/ogi-glk/openstack-prometheus-autoscaling.git
 
-# 2. (Optional) Customize threshold parameters in defaults/main.yml:
-# autoscaling_cpu_high_threshold: 75
-# autoscaling_cpu_low_threshold: 15
+# 2. Adjust parameters in defaults/main.yml as needed
 
 # 3. Execute the playbook:
 openstack-ansible autoscaling.yml
-# Or with standard Ansible:
-ansible-playbook -i your_inventory autoscaling.yml
+# Or:
+ansible-playbook -i inventory_file autoscaling.yml
 ```
-> **What it does:** Provisions required directories, builds an isolated Python `venv`, queries Heat API for webhook signals, deploys systemd units, and starts Prometheus services automatically. Zero manual intervention!
 
 ---
 
-### Method 2: Script-based Installation (`setup.sh`)
+### 2. Standalone Script Installation (`setup.sh`)
 
-To deploy standalone on a target host without Ansible:
+To deploy directly on the target host without Ansible:
 
-1. Obtain and export your Heat scaling signal URLs:
+1. Define Heat scaling signal URLs as environment variables:
    ```bash
    export HEAT_SCALEUP_URL=$(openstack stack output show <STACK_NAME> scaleup_url -f value -c output_value)
    export HEAT_SCALEDOWN_URL=$(openstack stack output show <STACK_NAME> scaledown_url -f value -c output_value)
    ```
-2. Run the automated setup script:
+2. Run the installation script:
    ```bash
    cd openstack-prometheus-autoscaling
    sudo bash setup.sh
@@ -152,11 +150,11 @@ To deploy standalone on a target host without Ansible:
 
 ---
 
-### Method 3: Step-by-Step Manual Setup (Debugging / Development)
+### 3. Step-by-Step Manual Setup (Debugging / Foreground Testing)
 
-If you wish to test components interactively in the foreground:
+To install manually or test components in the foreground:
 
-#### A) Create Directories & Copy Files:
+#### A) Create Directories and Copy Files:
 ```bash
 sudo mkdir -p /opt/openstack-bridge/exporters /opt/openstack-bridge/adapter /etc/prometheus /etc/alertmanager
 
@@ -174,13 +172,13 @@ sudo /opt/openstack-bridge/venv/bin/pip install --upgrade pip
 sudo /opt/openstack-bridge/venv/bin/pip install -r requirements.txt
 ```
 
-#### C) Run Interactively in Foreground:
+#### C) Run in Foreground:
 ```bash
 # Terminal 1: Launch Exporter
 source /root/openrc
 /opt/openstack-bridge/venv/bin/python3 /opt/openstack-bridge/exporters/server_group_exporter.py
 
-# Terminal 2: Launch Webhook Adapter
+# Terminal 2: Launch Adapter
 source /root/openrc
 export HEAT_SCALEUP_URL="https://<HEAT_IP>:8004/v1/.../scaleup_policy/signal"
 /opt/openstack-bridge/venv/bin/python3 /opt/openstack-bridge/adapter/heat_signal_adapter.py
@@ -188,19 +186,19 @@ export HEAT_SCALEUP_URL="https://<HEAT_IP>:8004/v1/.../scaleup_policy/signal"
 
 ---
 
-## 🧪 Verification & Autoscaling Stress Testing
+## Verification and Testing
 
-### 1. Service & Metric Validation
+### 1. Service Status Checks
 ```bash
 systemctl status server-group-exporter
 systemctl status heat-signal-adapter
 
-# Query exporter metrics (Instance to Stack ID mappings should be listed):
+# Test exporter metric output:
 curl -s http://localhost:9102/metrics
 ```
 
-### 2. Prometheus PromQL Vector Matching Query
-In Prometheus Web UI (`:9090`), execute:
+### 2. Prometheus PromQL Query
+In Prometheus UI (`:9090`), execute:
 ```promql
 avg by (server_group) (
   rate(libvirt_domain_info_cpu_time_seconds_total[5m]) 
@@ -209,19 +207,19 @@ avg by (server_group) (
 )
 ```
 
-### 3. Live CPU Stress (Autoscaling) Test
-1. SSH into an instance belonging to the Heat AutoScalingGroup and generate synthetic CPU load:
+### 3. CPU Load Testing
+1. SSH into an instance within the stack and generate synthetic load:
    ```bash
    cat /dev/zero > /dev/null &
    ```
-2. **Observe Scale-Out:** Once CPU utilization exceeds `70%`, Alertmanager triggers `CpuHigh`, notifies the adapter on port `:9200`, and Heat **spawns +1 new virtual machine.**
-3. Terminate the CPU stress load:
+2. **Scale-Out:** When average CPU utilization exceeds `70%`, Alertmanager triggers the webhook adapter, which signals Heat to spawn a new instance.
+3. Stop the load:
    ```bash
    killall cat
    ```
-4. **Observe Scale-In:** Once CPU drops below `20%`, `CpuLow` fires and Heat automatically deletes the excess instance.
+4. **Scale-In:** When CPU drops below `20%`, `CpuLow` fires and Heat terminates the excess instance.
 
 ---
 
-## 📄 License
+## License
 This project is licensed under the [Apache-2.0](LICENSE) License.
