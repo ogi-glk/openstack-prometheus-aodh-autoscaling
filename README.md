@@ -1,4 +1,4 @@
-﻿# OpenStack Prometheus Autoscaling Layer
+# OpenStack Prometheus Autoscaling Layer
 
 [Türkçe](README.md) | [English](README.en.md)
 
@@ -221,5 +221,41 @@ avg by (server_group) (
 
 ---
 
+
+---
+
+## Karşılaşılan Sorunlar ve Çözümleri (Troubleshooting)
+
+### 1. Systemd `EnvironmentFile` & Windows UTF-8 BOM Karakter Sorunu
+* **Belirti:** `server-group-exporter` veya `heat-signal-adapter` servisleri çalışırken `# Error connecting to OpenStack: Auth plugin requires parameters which were not given: auth_url` hatası vermesi.
+* **Kök Neden:** Windows ortamında hazırlanan veya PowerShell ile düzenlenen konfigürasyon dosyalarının (`openrc`) başına UTF-8 BOM (`\xef\xbb\xbf`) ve Windows satır sonları (`\r\n`) eklenebilir. Linux `systemd` servisi `EnvironmentFile` direktifini işlerken ilk satırdaki değişken adını `\ufeffOS_AUTH_URL` olarak algılar ve geçersiz karakter içerdiği için bu satırı yok sayar. İkinci satırdan itibaren (`OS_USERNAME`) okuduğu için `OS_AUTH_URL` process ortamına aktarılamaz.
+* **Çözüm:** 
+  1. `openrc.j2` şablonu doğrudan Unix satır sonu (`\n`) ve kesinlikle BOM'suz (UTF-8 without BOM) formatta tutulmalıdır.
+  2. Dosyada `export ` anahtar kelimesi kullanılmamalı, doğrudan `KEY=VALUE` biçimi uygulanmalıdır.
+  3. Hedef sunucuda temizlik komutu:
+     ```bash
+     sed -i '1s/^\xef\xbb\xbf//; s/\r$//' /opt/openstack-autoscaling/openrc
+     systemctl restart server-group-exporter heat-signal-adapter
+     ```
+
+### 2. Prometheus Alert Rules & Ansible Jinja2 Sözdizimi Çakışması
+* **Belirti:** Playbook çalıştırılırken `AnsibleError: template error while templating string: unexpected char '$'` hatası alınması.
+* **Kök Neden:** Prometheus alarm kuralları etiket ve değerler için `{{ $labels.server_group }}` ve `{{ $value }}` biçimini kullanır. Ansible'ın Jinja2 şablon motoru da değişken interpolation için `{{ ... }}` sözdizimini kullandığından, `$` karakterini geçersiz değişken olarak değerlendirip çöker.
+* **Çözüm:** `alert_rules.yml.j2` şablonundaki Prometheus değişkenleri `{% raw %}{{ $labels.server_group }}{% endraw %}` ve `{% raw %}{{ $value }}{% endraw %}` şeklinde raw bloklarına alınmıştır.
+
+### 3. OpenStack Python SDK Açık Parametre Geçişi
+* **Belirti:** `openstack.connect()` çağrısının kimlik parametrelerini bulamaması.
+* **Kök Neden:** Modern `openstacksdk` kütüphanesi parametresiz çağrıldığında varsayılan olarak `clouds.yaml` arar. Ortam değişkenlerinden kimlik doğrulaması için parametrelerin açıkça iletilmesi gerekir.
+* **Çözüm:** `server_group_exporter.py` içinde `openstack.connect()` çağrısına ortam değişkenleri doğrudan aktarılmıştır:
+  ```python
+  conn = openstack.connect(
+      auth_url=os.environ.get("OS_AUTH_URL"),
+      project_name=os.environ.get("OS_PROJECT_NAME", "admin"),
+      username=os.environ.get("OS_USERNAME", "admin"),
+      password=os.environ.get("OS_PASSWORD", ""),
+      user_domain_name=os.environ.get("OS_USER_DOMAIN_NAME", "Default"),
+      project_domain_name=os.environ.get("OS_PROJECT_DOMAIN_NAME", "Default"),
+  )
+  ```
 ## Lisans
 Bu proje [Apache-2.0](LICENSE) lisansı ile sunulmaktadır.

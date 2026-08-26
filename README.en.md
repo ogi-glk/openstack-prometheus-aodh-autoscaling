@@ -1,4 +1,4 @@
-﻿# OpenStack Prometheus Autoscaling Layer
+# OpenStack Prometheus Autoscaling Layer
 
 [Türkçe](README.md) | [English](README.en.md)
 
@@ -221,5 +221,41 @@ avg by (server_group) (
 
 ---
 
+
+---
+
+## Troubleshooting & Engineering Notes
+
+### 1. Systemd `EnvironmentFile` & Windows UTF-8 BOM Issue
+* **Symptom:** `server-group-exporter` or `heat-signal-adapter` failing with `# Error connecting to OpenStack: Auth plugin requires parameters which were not given: auth_url`.
+* **Root Cause:** When configuration files (`openrc`) are created or edited on Windows or generated via PowerShell, a 3-byte UTF-8 BOM (`\xef\xbb\xbf`) header and Windows CRLF line terminators may be introduced. Linux `systemd` does not strip the BOM when parsing `EnvironmentFile`, causing the first variable to be parsed as `\ufeffOS_AUTH_URL`. Because the key contains invalid non-ASCII characters, systemd silently discards that single line while reading subsequent lines (`OS_USERNAME`, etc.). Consequently, `OS_AUTH_URL` is omitted from the process environment.
+* **Resolution:**
+  1. `openrc.j2` is strictly maintained in Unix newline format (`\n`) without UTF-8 BOM.
+  2. The `export ` keyword is omitted (`KEY=VALUE` format is required by systemd).
+  3. One-line sanitization command on the target host:
+     ```bash
+     sed -i '1s/^\xef\xbb\xbf//; s/\r$//' /opt/openstack-autoscaling/openrc
+     systemctl restart server-group-exporter heat-signal-adapter
+     ```
+
+### 2. Prometheus Alert Rules vs Ansible Jinja2 Syntax Collision
+* **Symptom:** Playbook execution error: `AnsibleError: template error while templating string: unexpected char '$'`.
+* **Root Cause:** Prometheus alerting rules use `{{ $labels.server_group }}` and `{{ $value }}` for variable substitution. Ansible's Jinja2 templating engine also uses `{{ ... }}` for template variables, and fails when parsing `$`.
+* **Resolution:** Prometheus template variables in `alert_rules.yml.j2` are escaped using Jinja2 raw tags: `{% raw %}{{ $labels.server_group }}{% endraw %}` and `{% raw %}{{ $value }}{% endraw %}`.
+
+### 3. OpenStack Python SDK Explicit Parameter Passing
+* **Symptom:** `openstack.connect()` unable to locate authentication parameters.
+* **Root Cause:** In modern `openstacksdk`, calling `openstack.connect()` without arguments defaults to looking for `clouds.yaml`. When authenticating solely via environment variables, parameters must be passed explicitly.
+* **Resolution:** `server_group_exporter.py` explicitly injects environment variables into `openstack.connect()`:
+  ```python
+  conn = openstack.connect(
+      auth_url=os.environ.get("OS_AUTH_URL"),
+      project_name=os.environ.get("OS_PROJECT_NAME", "admin"),
+      username=os.environ.get("OS_USERNAME", "admin"),
+      password=os.environ.get("OS_PASSWORD", ""),
+      user_domain_name=os.environ.get("OS_USER_DOMAIN_NAME", "Default"),
+      project_domain_name=os.environ.get("OS_PROJECT_DOMAIN_NAME", "Default"),
+  )
+  ```
 ## License
 This project is licensed under the [Apache-2.0](LICENSE) License.

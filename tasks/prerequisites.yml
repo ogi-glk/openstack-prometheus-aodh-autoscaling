@@ -15,7 +15,7 @@
     state: present
     update_cache: true
 
-- name: Autoscaling çalışma dizinlerini oluştur
+- name: Autoscaling Ã§alÄ±ÅŸma dizinlerini oluÅŸtur
   ansible.builtin.file:
     path: "{{ item }}"
     state: directory
@@ -31,12 +31,12 @@
     - "/var/lib/prometheus"
     - "/var/lib/alertmanager"
 
-- name: İzole Python sanal ortamını (venv) oluştur
+- name: Ä°zole Python sanal ortamÄ±nÄ± (venv) oluÅŸtur
   ansible.builtin.command:
     cmd: "python3 -m venv {{ autoscaling_venv_dir }}"
     creates: "{{ autoscaling_venv_dir }}/bin/python3"
 
-- name: Python bağımlılıklarını venv içine kur
+- name: Python baÄŸÄ±mlÄ±lÄ±klarÄ±nÄ± venv iÃ§ine kur
   ansible.builtin.pip:
     name:
       - openstacksdk
@@ -46,10 +46,15 @@
     virtualenv: "{{ autoscaling_venv_dir }}"
     state: present
 
-- name: OpenStack kimlik dosyasını (openrc) oluştur
+- name: OpenStack kimlik dosyasÄ±nÄ± (openrc) oluÅŸtur
   ansible.builtin.template:
     src: openrc.j2
     dest: "{{ autoscaling_install_dir }}/openrc"
     mode: '0600'
     owner: "{{ autoscaling_service_user }}"
     group: "{{ autoscaling_service_group }}"
+
+- name: openrc dosyasındaki olası Windows BOM ve CRLF karakterlerini temizle
+  ansible.builtin.shell:
+    cmd: "sed -i '1s/^\xef\xbb\xbf//; s/\r$//' {{ autoscaling_install_dir }}/openrc"
+  changed_when: false
