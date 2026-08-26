@@ -16,9 +16,9 @@
     state: restarted
     daemon_reload: true
 
-- name: Restart libvirt-exporter
+- name: Restart prometheus-libvirt-exporter
   ansible.builtin.systemd:
-    name: libvirt-exporter
+    name: prometheus-libvirt-exporter
     state: restarted
     daemon_reload: true
 

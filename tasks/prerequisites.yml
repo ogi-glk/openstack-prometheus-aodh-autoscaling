@@ -12,6 +12,7 @@
       - curl
       - jq
       - prometheus-node-exporter
+      - prometheus-libvirt-exporter
     state: present
     update_cache: true
 
