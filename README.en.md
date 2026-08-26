@@ -94,7 +94,7 @@ cpu_alarm_high:
 
 ```text
 openstack-prometheus-aodh-autoscaling/
-├── autoscaling.yml                     # Ansible Deployment Playbook
+├── aodh-autoscaling.yml                     # Ansible Deployment Playbook
 ├── setup.sh                            # Standalone installation script
 ├── requirements.txt                    # Python dependencies
 │
@@ -135,9 +135,9 @@ openstack-prometheus-aodh-autoscaling/
 git clone https://github.com/ogi-glk/openstack-prometheus-aodh-autoscaling.git
 cd openstack-prometheus-aodh-autoscaling
 
-openstack-ansible autoscaling.yml
+openstack-ansible aodh-autoscaling.yml
 # or
-ansible-playbook -i hosts autoscaling.yml
+ansible-playbook -i hosts aodh-autoscaling.yml
 ```
 
 ### Method 2: Standalone Shell Script

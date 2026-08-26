@@ -99,7 +99,7 @@ Bu sayede:
 
 ```text
 openstack-prometheus-aodh-autoscaling/
-├── autoscaling.yml                     # Ansible Dağıtım Playbook'u
+├── aodh-autoscaling.yml                     # Ansible Dağıtım Playbook'u
 ├── setup.sh                            # Standalone bash kurulum betiği
 ├── requirements.txt                    # Python paket bağımlılıkları
 │
@@ -143,9 +143,9 @@ Deployer makinesinden:
 git clone https://github.com/ogi-glk/openstack-prometheus-aodh-autoscaling.git
 cd openstack-prometheus-aodh-autoscaling
 
-openstack-ansible autoscaling.yml
+openstack-ansible aodh-autoscaling.yml
 # Veya:
-ansible-playbook -i hosts autoscaling.yml
+ansible-playbook -i hosts aodh-autoscaling.yml
 ```
 
 ### 2. Yöntem: Standalone Script ile Kurulum (`setup.sh`)
