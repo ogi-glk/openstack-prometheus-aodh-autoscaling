@@ -1,10 +1,12 @@
 ﻿---
 # ==============================================================================
-# OpenStack Prometheus Autoscaling Dağıtım Playbook'u
-# Kullanım: openstack-ansible autoscaling.yml
+# OpenStack Prometheus Autoscaling Deployment Playbook
+# Usage:
+#   openstack-ansible autoscaling.yml
+#   ansible-playbook -i <inventory> autoscaling.yml
 # ==============================================================================
 - name: Deploy OpenStack Prometheus Autoscaling Layer
-  hosts: compute_hosts:compute-infra_hosts
+  hosts: "{{ autoscaling_target_hosts | default('compute_hosts:all[0]') }}"
   become: true
   roles:
-    - role: "{{ playbook_dir }}/roles/os_prometheus_autoscaling"
+    - role: "{{ playbook_dir }}"
