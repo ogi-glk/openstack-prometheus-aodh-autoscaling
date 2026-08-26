@@ -3,8 +3,8 @@
 OpenStack Nova Metadata -> Prometheus Metric Exporter (TTL Caching Background Worker)
 -------------------------------------------------------------------------------------
 Polls Nova API in a background thread every CACHE_TTL seconds (default: 60s).
-Filters ONLY instances belonging to Heat AutoScaling groups (metering.server_group).
-Non-Heat standalone VMs are cleanly excluded (no 'unknown' labels).
+Filters instances belonging to Heat AutoScaling groups (metering.server_group).
+Optional: Set FALLBACK_SERVER_GROUP="unknown" to also track standalone non-Heat VMs.
 Exposes `openstack_instance_server_group` gauge on :9102/metrics.
 """
 
@@ -16,6 +16,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 LISTEN_PORT = int(os.environ.get("EXPORTER_PORT", 9102))
 CACHE_TTL = int(os.environ.get("CACHE_TTL", 60))
+FALLBACK_SERVER_GROUP = os.environ.get("FALLBACK_SERVER_GROUP", "").strip()
 CACHE_DATA = "# HELP openstack_instance_server_group Nova instance to Heat stack_id (server_group) mapping\n# TYPE openstack_instance_server_group gauge\n"
 RUNNING = True
 
@@ -45,8 +46,9 @@ def poll_nova_loop():
             for server in conn.compute.servers(details=True):
                 domain_name = getattr(server, 'instance_name', None) or server.name
                 metadata = server.metadata or {}
-                # ONLY include instances that have a valid Heat server_group metadata
-                server_group = metadata.get("metering.server_group")
+                # By default only export instances with valid Heat server_group.
+                # If user configured FALLBACK_SERVER_GROUP (e.g. "unknown"), use that for standalone VMs.
+                server_group = metadata.get("metering.server_group") or (FALLBACK_SERVER_GROUP if FALLBACK_SERVER_GROUP else None)
                 instance_id = server.id
 
                 if domain_name and server_group:
@@ -83,7 +85,8 @@ class MetricsHandler(BaseHTTPRequestHandler):
         pass
 
 def run():
-    print(f"[*] Nova Server Group Exporter starting (CACHE_TTL={CACHE_TTL}s, Port={LISTEN_PORT})...", flush=True)
+    fallback_msg = f", FALLBACK_SERVER_GROUP='{FALLBACK_SERVER_GROUP}'" if FALLBACK_SERVER_GROUP else ""
+    print(f"[*] Nova Server Group Exporter starting (CACHE_TTL={CACHE_TTL}s, Port={LISTEN_PORT}{fallback_msg})...", flush=True)
     worker = threading.Thread(target=poll_nova_loop, daemon=True)
     worker.start()
 
