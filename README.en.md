@@ -4,258 +4,164 @@
 
 ---
 
-An integration layer providing CPU-based autoscaling for OpenStack environments using a lightweight **Prometheus + Alertmanager + libvirt-exporter** architecture instead of legacy Ceilometer, Gnocchi, and Aodh services.
-
-The project can be deployed in two ways:
-1. **Via Ansible Role:** Automated deployment across inventory hosts using `openstack-ansible` or standard `ansible-playbook`.
-2. **Standalone / Manual:** Direct installation on the target host using `setup.sh` or step-by-step commands.
+An integration layer providing CPU-based autoscaling for OpenStack environments using a lightweight **Prometheus + Alertmanager + Libvirt Exporter** architecture instead of legacy Ceilometer, Gnocchi, and Aodh services.
 
 ---
 
-## Architecture and Operating Logic
+## 1. Architecture and Data Flow
 
 ```text
-┌─────────────────┐       ┌────────────────────────┐
-│ libvirt-exporter│ :9177 │ server-group-exporter  │ :9102 (60s TTL Cache)
-│ (Raw CPU metrics│       │ (Nova Metadata/StackID)│
-└────────┬────────┘       └───────────┬────────────┘
-         │                            │
-         └──────────────┬─────────────┘
-                        ▼
-             ┌──────────────────────┐
-             │      Prometheus      │ :9090 (PromQL Vector Matching)
-             │  (Avg CPU > 70%)     │
-             └───────────┬──────────┘
-                        ▼
-             ┌──────────────────────┐
-             │     Alertmanager     │ :9093 (Webhook Routing)
-             └───────────┬──────────┘
-                        ▼
-             ┌──────────────────────┐
-             │ heat_signal_adapter  │ :9200 (Keystone Token Bridge)
-             └───────────┬──────────┘
-                        ▼
-             ┌──────────────────────┐
-             │     Heat Engine      │ :8004 (Scale-Out / Scale-In)
-             └───────────┬──────────┘
-```
-
-### Components:
-1. **libvirt-exporter (:9177):** Collects raw CPU time metrics directly from KVM/libvirt for running instances.
-2. **server-group-exporter (:9102):** Connects to Nova API to map instance domain names to Heat Stack IDs (`metering.server_group`). Features a 60-second TTL cache to minimize Nova API load.
-3. **Prometheus (:9090):** Combines both data streams using PromQL vector matching on the `domain` label and calculates average CPU utilization.
-4. **Alertmanager (:9093):** Evaluates firing conditions and routes webhook payloads to the local adapter.
-5. **heat_signal_adapter (:9200):** Receives the webhook alert, obtains a valid Keystone auth token, and dispatches an authenticated HTTP POST signal to Heat's scaling policy URL.
-
----
-
-## Directory Structure
-
-```text
-openstack-prometheus-autoscaling/
-├── autoscaling.yml                    # Deployment Ansible Playbook
-├── setup.sh                           # Standalone installation script
-├── requirements.txt                   # Python package dependencies
-│
-├── defaults/                          # Role variables
-│   └── main.yml                       # Thresholds, ports, and parameters
-│
-├── tasks/                             # Ansible task files
-│   ├── main.yml                       # Task execution entry point
-│   ├── prerequisites.yml              # Directories, system packages, and Python venv
-│   ├── prometheus.yml                 # Prometheus and Alertmanager setup
-│   └── adapter.yml                    # Adapter, exporter, and systemd service deployment
-│
-├── templates/                         # Jinja2 (.j2) configuration templates
-│   ├── openrc.j2                      # Keystone credentials template
-│   ├── alert_rules.yml.j2             # PromQL alert rules template
-│   ├── alertmanager.yml.j2            # Webhook routing template
-│   ├── prometheus.yml.j2              # Prometheus scrape targets template
-│   ├── heat-signal-adapter.service.j2 # Systemd adapter service template
-│   └── server-group-exporter.service.j2
-│
-├── handlers/                          # Service restart handlers
-│   └── main.yml
-│
-├── meta/                              # Ansible Galaxy metadata
-│   └── main.yml
-│
-├── exporters/                         # Python source code
-│   └── server_group_exporter.py       # Nova Metadata -> Prometheus exporter (:9102)
-│
-├── adapter/                           # Python source code
-│   └── heat_signal_adapter.py         # Alertmanager -> Heat API token adapter (:9200)
-│
-├── configs/                           # Reference configuration files (Manual installation)
-│   ├── prometheus.yml
-│   ├── alert_rules.yml
-│   └── alertmanager.yml
-│
-└── systemd/                           # Reference systemd service files (Manual installation)
-    ├── server-group-exporter.service
-    └── heat-signal-adapter.service
+┌────────────────────────┐         ┌──────────────────────────────┐
+│ libvirt-exporter       │ :9177   │ server-group-exporter        │ :9102
+│ KVM domain CPU metrics │         │ Nova Metadata -> Stack ID    │
+│ (instance-0000000X)    │         │ (60s TTL RAM Cache)          │
+└───────────┬────────────┘         └──────────────┬───────────────┘
+            │                                     │
+            └──────────────────┬──────────────────┘
+                               ▼
+                   ┌──────────────────────┐
+                   │      Prometheus      │ :9090
+                   │ PromQL Vector Join   │
+                   │ avg by (server_group)│
+                   └───────────┬──────────┘
+                               ▼
+                   ┌──────────────────────┐
+                   │     Alertmanager     │ :9093
+                   │ (group_wait, repeat) │
+                   └───────────┬──────────┘
+                               ▼
+                   ┌──────────────────────┐
+                   │ heat_signal_adapter  │ :9200
+                   │ OpenStack SDK        │
+                   │ Native Heat REST API │
+                   └───────────┬──────────┘
+                               ▼
+                   ┌──────────────────────┐
+                   │     Heat Engine      │ :8004
+                   │ AutoScalingGroup     │
+                   │ (Scale-Out/Scale-In) │
+                   └──────────────────────┘
 ```
 
 ---
 
-## Variables and Parameters
+## 2. Component Breakdown
 
-When using the Ansible Role, variables are defined in `defaults/main.yml`:
+### A) `libvirt-exporter` (Port: 9177)
+* Standard `prometheus-libvirt-exporter` package from Ubuntu 24.04 official repositories.
+* Collects raw vCPU time metrics in seconds directly from the KVM hypervisor:
+  ```text
+  libvirt_domain_info_cpu_time_seconds_total{domain="instance-00000007"} 584.41
+  ```
+* This exporter has zero dependency on OpenStack; it only tracks libvirt domain names (`instance-00000007`).
+
+### B) `server_group_exporter` (Port: 9102)
+* Lightweight Python service.
+* A background worker thread queries Nova API every **60 seconds** (`CACHE_TTL=60`).
+* Maps instance domain names to Heat Stack IDs (`metering.server_group`) and caches them in memory:
+  ```text
+  openstack_instance_server_group{domain="instance-00000007",instance_id="2972726a...",server_group="9b5093f6-83a5-4da2-8bae-9ca1545edd0d"} 1
+  ```
+* **Performance:** When Prometheus scrapes `:9102/metrics`, response time is **< 1 millisecond** from RAM cache. Zero latency, no API timeouts.
+
+### C) Prometheus & PromQL Vector Matching (Port: 9090)
+* Joins raw CPU metrics with metadata on the common `domain` label:
+  ```promql
+  avg by (server_group) (
+    rate(libvirt_domain_info_cpu_time_seconds_total[1m]) * 100
+    * on(domain) group_left(server_group)
+    openstack_instance_server_group
+  )
+  ```
+* **Isolation:** `by (server_group)` ensures CPU load is aggregated per Heat Stack. Other VMs on the same hypervisor do not affect scaling decisions.
+
+### D) Alertmanager (Port: 9093)
+* Evaluates `CpuHigh` (> 70%) and `CpuLow` (< 20%) alerts.
+* Prevents flapping via `group_wait` (10s) and triggers periodic notifications via `repeat_interval` (2m) to `http://localhost:9200`.
+
+### E) `heat_signal_adapter` (Port: 9200)
+* Webhook receiver written in Python.
+* Bypasses deprecated AWS CloudFormation port 8000 pre-signed URLs.
+* Uses `openstacksdk` with Keystone admin credentials to dispatch authorized HTTP POST signals directly to Heat's native REST API (`port 8004`):
+  * `CpuHigh` $\rightarrow$ `POST /stacks/<STACK_NAME>/<STACK_ID>/resources/scaleup_policy/signal`
+  * `CpuLow`  $\rightarrow$ `POST /stacks/<STACK_NAME>/<STACK_ID>/resources/scaledown_policy/signal`
+* Heat adjusts AutoScalingGroup capacity upon receiving the signal.
+
+---
+
+## 3. Configuration & Timing Parameters
+
+Configured via `defaults/main.yml`:
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `autoscaling_cpu_high_threshold` | `70` | Scale-Out trigger threshold (% CPU) |
-| `autoscaling_cpu_low_threshold` | `20` | Scale-In trigger threshold (% CPU) |
-| `autoscaling_evaluation_period` | `60s` | Evaluation wait time before firing |
-| `heat_signal_adapter_port` | `9200` | Heat adapter listening port |
+| `autoscaling_cpu_high_threshold` | `70` | Scale-Out threshold (% CPU) |
+| `autoscaling_cpu_low_threshold` | `20` | Scale-In threshold (% CPU) |
+| `autoscaling_evaluation_period` | `60s` | Verification window before alert fires (`for: 60s`) |
+| `autoscaling_alarm_cooldown` | `2m` | Alertmanager repeat interval |
+| `server_group_exporter_cache_ttl` | `60` | Nova API polling interval in seconds |
+| `heat_signal_adapter_port` | `9200` | Adapter listening port |
 | `server_group_exporter_port` | `9102` | Metadata exporter listening port |
-| `heat_stack_name` | `autoscaling-stack` | Heat Stack name for automatic signal URL discovery |
+| `heat_stack_name` | `autoscaling-stack` | Target Heat Stack name |
 
 ---
 
-## Installation Methods
+## 4. Deployment
 
-### 1. Deployment via Ansible Role
-
-From your Ansible control machine:
-
+### Method 1: Ansible Role (Recommended)
+From deployer machine:
 ```bash
-# 1. Clone the repository
 git clone https://github.com/ogi-glk/openstack-prometheus-autoscaling.git
+cd openstack-prometheus-autoscaling
 
-# 2. Adjust parameters in defaults/main.yml as needed
-
-# 3. Execute the playbook:
 openstack-ansible autoscaling.yml
-# Or:
-ansible-playbook -i inventory_file autoscaling.yml
+# or
+ansible-playbook -i hosts autoscaling.yml
 ```
 
----
-
-### 2. Standalone Script Installation (`setup.sh`)
-
-To deploy directly on the target host without Ansible:
-
-1. Define Heat scaling signal URLs as environment variables:
-   ```bash
-   export HEAT_SCALEUP_URL=$(openstack stack output show <STACK_NAME> scaleup_url -f value -c output_value)
-   export HEAT_SCALEDOWN_URL=$(openstack stack output show <STACK_NAME> scaledown_url -f value -c output_value)
-   ```
-2. Run the installation script:
-   ```bash
-   cd openstack-prometheus-autoscaling
-   sudo bash setup.sh
-   ```
-
----
-
-### 3. Step-by-Step Manual Setup (Debugging / Foreground Testing)
-
-To install manually or test components in the foreground:
-
-#### A) Create Directories and Copy Files:
+### Method 2: Standalone Shell Script
 ```bash
-sudo mkdir -p /opt/openstack-bridge/exporters /opt/openstack-bridge/adapter /etc/prometheus /etc/alertmanager
-
-sudo cp -r exporters/* /opt/openstack-bridge/exporters/
-sudo cp -r adapter/* /opt/openstack-bridge/adapter/
-sudo cp configs/prometheus.yml /etc/prometheus/prometheus.yml
-sudo cp configs/alert_rules.yml /etc/prometheus/alert_rules.yml
-sudo cp configs/alertmanager.yml /etc/alertmanager/alertmanager.yml
-```
-
-#### B) Prepare Isolated Virtual Environment:
-```bash
-sudo python3 -m venv /opt/openstack-bridge/venv
-sudo /opt/openstack-bridge/venv/bin/pip install --upgrade pip
-sudo /opt/openstack-bridge/venv/bin/pip install -r requirements.txt
-```
-
-#### C) Run in Foreground:
-```bash
-# Terminal 1: Launch Exporter
-source /root/openrc
-/opt/openstack-bridge/venv/bin/python3 /opt/openstack-bridge/exporters/server_group_exporter.py
-
-# Terminal 2: Launch Adapter
-source /root/openrc
-export HEAT_SCALEUP_URL="https://<HEAT_IP>:8004/v1/.../scaleup_policy/signal"
-/opt/openstack-bridge/venv/bin/python3 /opt/openstack-bridge/adapter/heat_signal_adapter.py
+cd openstack-prometheus-autoscaling
+sudo bash setup.sh
 ```
 
 ---
 
-## Verification and Testing
+## 5. Live Production Evidence
 
-### 1. Service Status Checks
-```bash
-systemctl status server-group-exporter
-systemctl status heat-signal-adapter
-
-# Test exporter metric output:
-curl -s http://localhost:9102/metrics
+### A) Exporter Scrape Output (Multi-Instance Discovery):
+```text
+$ curl -s http://localhost:9102/metrics
+openstack_instance_server_group{domain="instance-00000007",instance_id="2972726a...",server_group="9b5093f6-83a5-4da2-8bae-9ca1545edd0d"} 1
+openstack_instance_server_group{domain="instance-00000008",instance_id="55497eaa...",server_group="9b5093f6-83a5-4da2-8bae-9ca1545edd0d"} 1
+openstack_instance_server_group{domain="instance-00000009",instance_id="1810fd03...",server_group="9b5093f6-83a5-4da2-8bae-9ca1545edd0d"} 1
 ```
 
-### 2. Prometheus PromQL Query
-In Prometheus UI (`:9090`), execute:
-```promql
-avg by (server_group) (
-  rate(libvirt_domain_info_cpu_time_seconds_total[5m]) 
-  * on(domain) group_left(server_group) 
-  openstack_instance_server_group
-)
+### B) Adapter Execution Log (Touchless Scale-Out & Scale-In):
+```text
+$ journalctl -u heat-signal-adapter -n 10 --no-pager
+[*] Native Heat Signal Adapter listening on port :9200 for stack 'autoscaling-stack'...
+[+] SUCCESS: CpuHigh -> Native Heat signal 'scaleup_policy' triggered (HTTP 200)   <-- Scale-Out: 1 to 2 VMs
+[+] SUCCESS: CpuHigh -> Native Heat signal 'scaleup_policy' triggered (HTTP 200)   <-- Scale-Out: 2 to 3 VMs (Max capacity)
+[+] SUCCESS: CpuLow  -> Native Heat signal 'scaledown_policy' triggered (HTTP 200) <-- Load removed: 3 to 2 VMs
+[+] SUCCESS: CpuLow  -> Native Heat signal 'scaledown_policy' triggered (HTTP 200) <-- Load removed: 2 to 1 VM (Min baseline)
 ```
-
-### 3. CPU Load Testing
-1. SSH into an instance within the stack and generate synthetic load:
-   ```bash
-   cat /dev/zero > /dev/null &
-   ```
-2. **Scale-Out:** When average CPU utilization exceeds `70%`, Alertmanager triggers the webhook adapter, which signals Heat to spawn a new instance.
-3. Stop the load:
-   ```bash
-   killall cat
-   ```
-4. **Scale-In:** When CPU drops below `20%`, `CpuLow` fires and Heat terminates the excess instance.
 
 ---
 
+## 6. Troubleshooting
+
+1. **BrokenPipeError on Port 9102:**  
+   * *Root Cause:* Synchronous Nova API queries exceeding Prometheus scrape timeout.
+   * *Solution:* Exporter decoupled into background worker thread; metrics served instantly from RAM.
+2. **HTTP 403 AccessDenied on Port 8000:**  
+   * *Root Cause:* Heat CFN signed URL token validation conflicts with Keystone v3.
+   * *Solution:* Direct signal dispatch to native Heat REST API (`port 8004`) using Keystone credentials via `openstacksdk`.
+3. **Systemd `%` Specifier Failure:**  
+   * *Root Cause:* Systemd unit files treating URL query strings (`%3A`) as invalid specifiers.
+   * *Solution:* Environment variables sourced directly from `EnvironmentFile` (`openrc`).
 
 ---
 
-## Troubleshooting & Engineering Notes
-
-### 1. Systemd `EnvironmentFile` & Windows UTF-8 BOM Issue
-* **Symptom:** `server-group-exporter` or `heat-signal-adapter` failing with `# Error connecting to OpenStack: Auth plugin requires parameters which were not given: auth_url`.
-* **Root Cause:** When configuration files (`openrc`) are created or edited on Windows or generated via PowerShell, a 3-byte UTF-8 BOM (`\xef\xbb\xbf`) header and Windows CRLF line terminators may be introduced. Linux `systemd` does not strip the BOM when parsing `EnvironmentFile`, causing the first variable to be parsed as `\ufeffOS_AUTH_URL`. Because the key contains invalid non-ASCII characters, systemd silently discards that single line while reading subsequent lines (`OS_USERNAME`, etc.). Consequently, `OS_AUTH_URL` is omitted from the process environment.
-* **Resolution:**
-  1. `openrc.j2` is strictly maintained in Unix newline format (`\n`) without UTF-8 BOM.
-  2. The `export ` keyword is omitted (`KEY=VALUE` format is required by systemd).
-  3. One-line sanitization command on the target host:
-     ```bash
-     sed -i '1s/^\xef\xbb\xbf//; s/\r$//' /opt/openstack-autoscaling/openrc
-     systemctl restart server-group-exporter heat-signal-adapter
-     ```
-
-### 2. Prometheus Alert Rules vs Ansible Jinja2 Syntax Collision
-* **Symptom:** Playbook execution error: `AnsibleError: template error while templating string: unexpected char '$'`.
-* **Root Cause:** Prometheus alerting rules use `{{ $labels.server_group }}` and `{{ $value }}` for variable substitution. Ansible's Jinja2 templating engine also uses `{{ ... }}` for template variables, and fails when parsing `$`.
-* **Resolution:** Prometheus template variables in `alert_rules.yml.j2` are escaped using Jinja2 raw tags: `{% raw %}{{ $labels.server_group }}{% endraw %}` and `{% raw %}{{ $value }}{% endraw %}`.
-
-### 3. OpenStack Python SDK Explicit Parameter Passing
-* **Symptom:** `openstack.connect()` unable to locate authentication parameters.
-* **Root Cause:** In modern `openstacksdk`, calling `openstack.connect()` without arguments defaults to looking for `clouds.yaml`. When authenticating solely via environment variables, parameters must be passed explicitly.
-* **Resolution:** `server_group_exporter.py` explicitly injects environment variables into `openstack.connect()`:
-  ```python
-  conn = openstack.connect(
-      auth_url=os.environ.get("OS_AUTH_URL"),
-      project_name=os.environ.get("OS_PROJECT_NAME", "admin"),
-      username=os.environ.get("OS_USERNAME", "admin"),
-      password=os.environ.get("OS_PASSWORD", ""),
-      user_domain_name=os.environ.get("OS_USER_DOMAIN_NAME", "Default"),
-      project_domain_name=os.environ.get("OS_PROJECT_DOMAIN_NAME", "Default"),
-  )
-  ```
 ## License
-This project is licensed under the [Apache-2.0](LICENSE) License.
+Licensed under [Apache-2.0](LICENSE).
