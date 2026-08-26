@@ -2,10 +2,11 @@
 """
 Alertmanager -> Heat Webhook Signal Adapter
 -------------------------------------------
-Alertmanager issues POST notifications to :9200 upon threshold breaches.
+Alertmanager sends POST alerts to :9200 upon threshold breaches.
 This adapter:
-1. Parses alertname (CpuHigh or CpuLow).
-2. Forwards an authenticated or pre-signed POST request to Heat scaling policy signal URL.
+1. Catches alertname (CpuHigh or CpuLow).
+2. Authenticates with Keystone via openstacksdk to fetch a fresh valid token.
+3. Attaches X-Auth-Token header and forwards POST request to Heat scaling policy URL.
 """
 
 import os
@@ -23,7 +24,7 @@ SIGNAL_URLS = {
 }
 
 def get_openstack_token():
-    """Retrieves current Keystone auth token using openstacksdk."""
+    """Retrieves fresh Keystone auth token using openstacksdk."""
     try:
         import openstack
         auth_url = os.environ.get("OS_AUTH_URL")
@@ -38,7 +39,9 @@ def get_openstack_token():
             )
         else:
             conn = openstack.connect(cloud="envvars")
-        return conn.auth_token
+        
+        token = conn.session.get_token() if hasattr(conn, 'session') else getattr(conn, 'auth_token', None)
+        return token
     except Exception as e:
         print(f"[!] Warning: Unable to acquire Keystone token: {e}", flush=True)
         return None
@@ -68,11 +71,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 req = urllib.request.Request(target_url, data=b"", method="POST")
                 
-                # Pre-signed Heat URLs (containing Signature=) do not require a Keystone token
-                if "Signature=" not in target_url:
-                    token = get_openstack_token()
-                    if token:
-                        req.add_header("X-Auth-Token", token)
+                # Always fetch and attach fresh Keystone token as requested
+                token = get_openstack_token()
+                if token:
+                    req.add_header("X-Auth-Token", token)
                 
                 # Support self-signed SSL certificates in lab environments
                 ctx = ssl.create_default_context()
