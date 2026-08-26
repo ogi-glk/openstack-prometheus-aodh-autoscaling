@@ -1,0 +1,30 @@
+groups:
+  - name: autoscaling_rules
+    rules:
+      # SCALE-OUT: CPU Kullanımı Eşik Değeri Geçtiğinde Büyüt (+1 VM)
+      - alert: CpuHigh
+        expr: >
+          avg by (server_group) (
+            rate(libvirt_domain_info_cpu_time_total[1m]) / 1e9 * 100
+            * on(domain) group_left(server_group) openstack_instance_server_group
+          ) > {{ autoscaling_cpu_high_threshold }}
+        for: {{ autoscaling_evaluation_period }}
+        labels:
+          severity: critical
+        annotations:
+          summary: "Yüksek CPU Kullanımı: Stack {{ $labels.server_group }}"
+          description: "Stack CPU kullanımı son {{ autoscaling_evaluation_period }} boyunca %{{ autoscaling_cpu_high_threshold }} üzerinde seyretti (Değer: {{ $value }}%). Scale-Out tetikleniyor."
+
+      # SCALE-IN: CPU Kullanımı Düşük Eşiğin Altına İndiğinde Küçült (-1 VM)
+      - alert: CpuLow
+        expr: >
+          avg by (server_group) (
+            rate(libvirt_domain_info_cpu_time_total[1m]) / 1e9 * 100
+            * on(domain) group_left(server_group) openstack_instance_server_group
+          ) < {{ autoscaling_cpu_low_threshold }}
+        for: {{ autoscaling_evaluation_period }}
+        labels:
+          severity: warning
+        annotations:
+          summary: "Düşük CPU Kullanımı: Stack {{ $labels.server_group }}"
+          description: "Stack CPU kullanımı son {{ autoscaling_evaluation_period }} boyunca %{{ autoscaling_cpu_low_threshold }} altında seyretti (Değer: {{ $value }}%). Scale-In tetikleniyor."

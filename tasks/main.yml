@@ -1,0 +1,20 @@
+---
+# os_prometheus_autoscaling / tasks / main.yml
+# ==============================================================================
+# OpenStack Prometheus Autoscaling Kurulum Görevleri
+# ==============================================================================
+
+- name: 1. Ön Koşulları ve Python Bağımlılıklarını Kur
+  ansible.builtin.import_tasks: prerequisites.yml
+  tags:
+    - autoscaling-prereqs
+
+- name: 2. Prometheus ve Alertmanager Kurulumu
+  ansible.builtin.import_tasks: prometheus.yml
+  tags:
+    - autoscaling-prometheus
+
+- name: 3. Heat Webhook Adaptörü ve Exporter Servislerini Kur
+  ansible.builtin.import_tasks: adapter.yml
+  tags:
+    - autoscaling-adapter

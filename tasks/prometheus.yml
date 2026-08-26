@@ -1,0 +1,103 @@
+---
+# os_prometheus_autoscaling / tasks / prometheus.yml
+
+- name: Prometheus binary paketini indir ve aç
+  ansible.builtin.unarchive:
+    src: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+    dest: "/tmp"
+    remote_src: true
+    creates: "/usr/local/bin/prometheus"
+
+- name: Prometheus binary'lerini /usr/local/bin altına taşı
+  ansible.builtin.copy:
+    src: "/tmp/prometheus-{{ prometheus_version }}.linux-amd64/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    mode: '0755'
+    remote_src: true
+  loop:
+    - prometheus
+    - promtool
+
+- name: Alertmanager binary paketini indir ve aç
+  ansible.builtin.unarchive:
+    src: "https://github.com/prometheus/alertmanager/releases/download/v{{ alertmanager_version }}/alertmanager-{{ alertmanager_version }}.linux-amd64.tar.gz"
+    dest: "/tmp"
+    remote_src: true
+    creates: "/usr/local/bin/alertmanager"
+
+- name: Alertmanager binary'lerini /usr/local/bin altına taşı
+  ansible.builtin.copy:
+    src: "/tmp/alertmanager-{{ alertmanager_version }}.linux-amd64/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    mode: '0755'
+    remote_src: true
+  loop:
+    - alertmanager
+    - amtool
+
+- name: Prometheus konfigürasyonunu (prometheus.yml) yerleştir
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: "/etc/prometheus/prometheus.yml"
+    mode: '0644'
+  notify: Restart prometheus
+
+- name: Prometheus alarm kurallarını (alert_rules.yml) yerleştir
+  ansible.builtin.template:
+    src: alert_rules.yml.j2
+    dest: "/etc/prometheus/alert_rules.yml"
+    mode: '0644'
+  notify: Restart prometheus
+
+- name: Alertmanager konfigürasyonunu (alertmanager.yml) yerleştir
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "/etc/alertmanager/alertmanager.yml"
+    mode: '0644'
+  notify: Restart alertmanager
+
+- name: Prometheus systemd servisini oluştur
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/prometheus.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus Monitoring System
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus/
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart prometheus
+
+- name: Alertmanager systemd servisini oluştur
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/alertmanager.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus Alertmanager
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/alertmanager --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/var/lib/alertmanager/
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart alertmanager
+
+- name: Prometheus ve Alertmanager servislerini başlat
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  loop:
+    - prometheus
+    - alertmanager

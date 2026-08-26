@@ -1,0 +1,29 @@
+---
+# os_prometheus_autoscaling / handlers / main.yml
+# ==============================================================================
+# Servis Yeniden Başlatma Tetikleyicileri
+# ==============================================================================
+
+- name: Restart prometheus
+  ansible.builtin.systemd:
+    name: prometheus
+    state: restarted
+    daemon_reload: true
+
+- name: Restart alertmanager
+  ansible.builtin.systemd:
+    name: alertmanager
+    state: restarted
+    daemon_reload: true
+
+- name: Restart heat-signal-adapter
+  ansible.builtin.systemd:
+    name: heat-signal-adapter
+    state: restarted
+    daemon_reload: true
+
+- name: Restart server-group-exporter
+  ansible.builtin.systemd:
+    name: server-group-exporter
+    state: restarted
+    daemon_reload: true

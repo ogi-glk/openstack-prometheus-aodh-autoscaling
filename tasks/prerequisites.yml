@@ -1,0 +1,55 @@
+---
+# os_prometheus_autoscaling / tasks / prerequisites.yml
+
+- name: Gerekli sistem paketlerini kur
+  ansible.builtin.apt:
+    name:
+      - python3-pip
+      - python3-venv
+      - python3-dev
+      - build-essential
+      - tar
+      - curl
+      - jq
+      - prometheus-node-exporter
+    state: present
+    update_cache: true
+
+- name: Autoscaling çalışma dizinlerini oluştur
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+    owner: "{{ autoscaling_service_user }}"
+    group: "{{ autoscaling_service_group }}"
+  loop:
+    - "{{ autoscaling_install_dir }}"
+    - "{{ autoscaling_install_dir }}/adapter"
+    - "{{ autoscaling_install_dir }}/exporters"
+    - "/etc/prometheus"
+    - "/etc/alertmanager"
+    - "/var/lib/prometheus"
+    - "/var/lib/alertmanager"
+
+- name: İzole Python sanal ortamını (venv) oluştur
+  ansible.builtin.command:
+    cmd: "python3 -m venv {{ autoscaling_venv_dir }}"
+    creates: "{{ autoscaling_venv_dir }}/bin/python3"
+
+- name: Python bağımlılıklarını venv içine kur
+  ansible.builtin.pip:
+    name:
+      - openstacksdk
+      - prometheus-client
+      - requests
+      - urllib3
+    virtualenv: "{{ autoscaling_venv_dir }}"
+    state: present
+
+- name: OpenStack kimlik dosyasını (openrc) oluştur
+  ansible.builtin.template:
+    src: openrc.j2
+    dest: "{{ autoscaling_install_dir }}/openrc"
+    mode: '0600'
+    owner: "{{ autoscaling_service_user }}"
+    group: "{{ autoscaling_service_group }}"

@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenStack Nova Metadata Server Group Exporter
+After=network.target
+
+[Service]
+Type=simple
+User={{ autoscaling_service_user }}
+Group={{ autoscaling_service_group }}
+WorkingDirectory={{ autoscaling_install_dir }}
+EnvironmentFile={{ autoscaling_install_dir }}/openrc
+Environment="EXPORTER_PORT={{ server_group_exporter_port }}"
+ExecStart={{ autoscaling_venv_dir }}/bin/python3 {{ autoscaling_install_dir }}/exporters/server_group_exporter.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

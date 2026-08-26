@@ -1,0 +1,90 @@
+﻿---
+# os_prometheus_autoscaling / tasks / adapter.yml
+
+- name: Heat Stack'ten Scale-Up ve Scale-Down URL'lerini otomatik keÅŸfet (EÄŸer boÅŸ bÄ±rakÄ±ldÄ±ysa)
+  when: heat_scaleup_url == "" and heat_stack_name != ""
+  block:
+    - name: Heat Stack kontrolÃ¼ yap
+      ansible.builtin.command:
+        cmd: "openstack stack show {{ heat_stack_name }} -f value -c stack_status"
+      environment:
+        OS_AUTH_URL: "{{ openstack_auth_url }}"
+        OS_USERNAME: "{{ openstack_username }}"
+        OS_PASSWORD: "{{ openstack_password }}"
+        OS_PROJECT_NAME: "{{ openstack_project_name }}"
+        OS_USER_DOMAIN_NAME: "{{ openstack_user_domain_name }}"
+        OS_PROJECT_DOMAIN_NAME: "{{ openstack_project_domain_name }}"
+      register: _stack_check
+      failed_when: false
+      changed_when: false
+
+    - name: Scale-Up URL'sini Ã§ek
+      when: _stack_check.rc == 0
+      ansible.builtin.command:
+        cmd: "openstack stack output show {{ heat_stack_name }} scaleup_url -f value -c output_value"
+      environment:
+        OS_AUTH_URL: "{{ openstack_auth_url }}"
+        OS_USERNAME: "{{ openstack_username }}"
+        OS_PASSWORD: "{{ openstack_password }}"
+        OS_PROJECT_NAME: "{{ openstack_project_name }}"
+        OS_USER_DOMAIN_NAME: "{{ openstack_user_domain_name }}"
+        OS_PROJECT_DOMAIN_NAME: "{{ openstack_project_domain_name }}"
+      register: _scaleup_res
+      changed_when: false
+
+    - name: Scale-Down URL'sini Ã§ek
+      when: _stack_check.rc == 0
+      ansible.builtin.command:
+        cmd: "openstack stack output show {{ heat_stack_name }} scaledown_url -f value -c output_value"
+      environment:
+        OS_AUTH_URL: "{{ openstack_auth_url }}"
+        OS_USERNAME: "{{ openstack_username }}"
+        OS_PASSWORD: "{{ openstack_password }}"
+        OS_PROJECT_NAME: "{{ openstack_project_name }}"
+        OS_USER_DOMAIN_NAME: "{{ openstack_user_domain_name }}"
+        OS_PROJECT_DOMAIN_NAME: "{{ openstack_project_domain_name }}"
+      register: _scaledown_res
+      changed_when: false
+
+    - name: KeÅŸfedilen Webhook URL'lerini kaydet
+      when: _stack_check.rc == 0
+      ansible.builtin.set_fact:
+        heat_scaleup_url: "{{ _scaleup_res.stdout }}"
+        heat_scaledown_url: "{{ _scaledown_res.stdout }}"
+
+- name: Python kaynak kodlarÄ±nÄ± hedef dizine yerleÅŸtir
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0755'
+    owner: "{{ autoscaling_service_user }}"
+    group: "{{ autoscaling_service_group }}"
+  loop:
+    - { src: "{{ role_path }}/adapter/heat_signal_adapter.py", dest: "{{ autoscaling_install_dir }}/adapter/heat_signal_adapter.py" }
+    - { src: "{{ role_path }}/exporters/server_group_exporter.py", dest: "{{ autoscaling_install_dir }}/exporters/server_group_exporter.py" }
+  notify:
+    - Restart heat-signal-adapter
+    - Restart server-group-exporter
+
+- name: Adapter ve Exporter systemd servis dosyalarÄ±nÄ± oluÅŸtur
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    mode: '0644'
+  loop:
+    - { src: "heat-signal-adapter.service.j2", dest: "heat-signal-adapter.service" }
+    - { src: "server-group-exporter.service.j2", dest: "server-group-exporter.service" }
+  notify:
+    - Restart heat-signal-adapter
+    - Restart server-group-exporter
+
+- name: Adapter ve Exporter servislerini baÅŸlat ve etkinleÅŸtir
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  loop:
+    - heat-signal-adapter
+    - server-group-exporter
+
