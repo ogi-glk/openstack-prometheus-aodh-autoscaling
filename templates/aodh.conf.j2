@@ -1,28 +1,33 @@
 [DEFAULT]
 debug = false
-transport_url = rabbit://{{ aodh_rabbit_user }}:{{ aodh_rabbit_password }}@{{ aodh_rabbit_host }}:5672/
+transport_url = rabbit://{{ aodh_rabbit_user }}:{{ aodh_rabbit_password }}@{{ aodh_rabbit_host }}:5671/?ssl=1&ssl_version=TLSv1_2&ssl_ca_file=
 auth_strategy = keystone
 
 [database]
-connection = mysql+pymysql://{{ aodh_db_user }}:{{ aodh_db_password }}@{{ aodh_db_host }}/{{ aodh_db_name }}
+connection = mysql+pymysql://{{ aodh_db_user }}:{{ aodh_db_password }}@{{ aodh_db_host }}:3306/{{ aodh_db_name }}?charset=utf8
 
 [keystone_authtoken]
+insecure = False
 auth_type = password
 auth_url = {{ openstack_auth_url }}
+www_authenticate_uri = http://{{ internal_lb_vip_address | default('172.29.236.101') }}:5000
+project_domain_id = default
+user_domain_id = default
+project_name = {{ aodh_service_project }}
 username = {{ aodh_service_user }}
 password = {{ aodh_service_password }}
-user_domain_name = {{ openstack_user_domain_name }}
-project_name = {{ aodh_service_project }}
-project_domain_name = {{ openstack_project_domain_name }}
+region_name = RegionOne
 
 [service_credentials]
 auth_type = password
 auth_url = {{ openstack_auth_url }}
+project_domain_id = default
+user_domain_id = default
+project_name = {{ aodh_service_project }}
 username = {{ aodh_service_user }}
 password = {{ aodh_service_password }}
-user_domain_name = {{ openstack_user_domain_name }}
-project_name = {{ aodh_service_project }}
-project_domain_name = {{ openstack_project_domain_name }}
+region_name = RegionOne
+interface = internal
 
 [api]
 port = {{ aodh_port }}

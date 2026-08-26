@@ -40,38 +40,19 @@
     update_cache: true
   when: not aodh_is_installed
 
-- name: Ensure /etc/aodh directory exists
+- name: Ensure /etc/aodh directory exists with proper permissions
   ansible.builtin.file:
     path: /etc/aodh
     state: directory
-    mode: '0750'
+    mode: '0755'
     owner: aodh
     group: aodh
-  when: not aodh_is_installed
 
-- name: Setup Keystone Service, User and Endpoints for Aodh
-  ansible.builtin.shell: |
-    source {{ autoscaling_install_dir }}/openrc
-
-    # 1. Service oluştur (yoksa)
-    openstack service show alarming >/dev/null 2>&1 || \
-      openstack service create --name aodh --description "OpenStack Alarming Service" alarming
-
-    # 2. Service kullanıcısı oluştur (yoksa)
-    openstack user show {{ aodh_service_user }} >/dev/null 2>&1 || \
-      openstack user create --domain default --password "{{ aodh_service_password }}" {{ aodh_service_user }}
-
-    # 3. Admin rolü ver
-    openstack role add --project {{ aodh_service_project }} --user {{ aodh_service_user }} admin
-
-    # 4. Endpoints oluştur (yoksa)
-    ENDPOINT_EXISTS=$(openstack endpoint list --service alarming -f value -c ID | wc -l)
-    if [ "$ENDPOINT_EXISTS" -eq 0 ]; then
-      openstack endpoint create --region RegionOne alarming public "http://{{ aodh_db_host }}:{{ aodh_port }}"
-      openstack endpoint create --region RegionOne alarming internal "http://{{ aodh_db_host }}:{{ aodh_port }}"
-      openstack endpoint create --region RegionOne alarming admin "http://{{ aodh_db_host }}:{{ aodh_port }}"
-    fi
-  failed_when: false
+- name: Add www-data user to aodh group for Apache WSGI file access
+  ansible.builtin.user:
+    name: www-data
+    groups: aodh
+    append: true
 
 - name: Deploy full aodh.conf configuration
   ansible.builtin.template:
@@ -79,23 +60,48 @@
     dest: /etc/aodh/aodh.conf
     owner: aodh
     group: aodh
-    mode: '0640'
-  when: not aodh_is_installed
+    mode: '0644'
 
-- name: Run Aodh Database Sync (dbsync)
-  ansible.builtin.command: su -s /bin/sh -c "aodh-dbsync" aodh
-  failed_when: false
-
-# 3. SERVİS BAŞLATMA (Ubuntu'da aodh-api Apache2 mod_wsgi üzerinden çalışır)
-- name: Enable aodh-api site in Apache2 and start web server
+- name: Configure Apache2 for Aodh API (disable default port 80/443 collision)
   ansible.builtin.shell: |
-    if [ -f /etc/apache2/sites-available/aodh-api.conf ]; then
-      a2ensite aodh-api 2>/dev/null || true
-      systemctl enable --now apache2 2>/dev/null || true
-      systemctl restart apache2 2>/dev/null || true
-    fi
+    sed -i 's/^Listen 80/# Listen 80/' /etc/apache2/ports.conf
+    sed -i 's/^Listen 443/# Listen 443/' /etc/apache2/ports.conf
+    sed -i '/Listen {{ aodh_port }}/d' /etc/apache2/ports.conf
+    a2dissite 000-default 2>/dev/null || true
+    a2enmod wsgi 2>/dev/null || true
+    a2ensite aodh-api 2>/dev/null || true
+    systemctl daemon-reload
+    systemctl enable --now apache2 2>/dev/null || true
+    systemctl restart apache2 2>/dev/null || true
   failed_when: false
 
+# 3. KEYSTONE ENTEGRASYONU
+- name: Setup Keystone Service, User and Endpoints for Aodh
+  ansible.builtin.shell: |
+    openstack service show alarming >/dev/null 2>&1 || \
+      openstack service create --name aodh --description "OpenStack Alarming Service" alarming
+
+    openstack user show {{ aodh_service_user }} >/dev/null 2>&1 || \
+      openstack user create --domain default --password "{{ aodh_service_password }}" {{ aodh_service_user }}
+
+    openstack role add --project {{ aodh_service_project }} --user {{ aodh_service_user }} admin
+
+    openstack endpoint show alarming >/dev/null 2>&1 || {
+      openstack endpoint create --region RegionOne alarming public "http://{{ aodh_db_host }}:{{ aodh_port }}"
+      openstack endpoint create --region RegionOne alarming internal "http://{{ aodh_db_host }}:{{ aodh_port }}"
+      openstack endpoint create --region RegionOne alarming admin "http://{{ aodh_db_host }}:{{ aodh_port }}"
+    }
+  environment:
+    OS_AUTH_URL: "{{ openstack_auth_url }}"
+    OS_PROJECT_NAME: "{{ openstack_project_name }}"
+    OS_USERNAME: "{{ openstack_username }}"
+    OS_PASSWORD: "{{ openstack_password }}"
+    OS_USER_DOMAIN_NAME: "{{ openstack_user_domain_name }}"
+    OS_PROJECT_DOMAIN_NAME: "{{ openstack_project_domain_name }}"
+    OS_IDENTITY_API_VERSION: "3"
+  failed_when: false
+
+# 4. ARKA PLAN SERVİSLERİNİ BAŞLATMA
 - name: Enable and start Aodh background daemon services
   ansible.builtin.systemd:
     name: "{{ item }}"
@@ -107,14 +113,14 @@
     - aodh-notifier
     - aodh-listener
 
-# 4. PROMETHEUS ENTEGRASYONU (Her zaman doğrulanır)
+# 5. PROMETHEUS ENTEGRASYONU
 - name: Ensure Prometheus URL is configured in /etc/aodh/aodh.conf
   community.general.ini_file:
     path: /etc/aodh/aodh.conf
     section: prometheus
     option: url
     value: "{{ aodh_prometheus_url }}"
-    mode: '0640'
+    mode: '0644'
     owner: aodh
     group: aodh
   notify:
