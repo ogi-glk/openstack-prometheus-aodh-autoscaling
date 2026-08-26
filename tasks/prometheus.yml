@@ -35,6 +35,20 @@
     - alertmanager
     - amtool
 
+- name: Download and unpack Libvirt Exporter binary archive
+  ansible.builtin.unarchive:
+    src: "https://github.com/prometheus-community/libvirt_exporter/releases/download/v{{ libvirt_exporter_version }}/libvirt_exporter-{{ libvirt_exporter_version }}.linux-amd64.tar.gz"
+    dest: "/tmp"
+    remote_src: true
+    creates: "/tmp/libvirt_exporter-{{ libvirt_exporter_version }}.linux-amd64/libvirt_exporter"
+
+- name: Install Libvirt Exporter binary to /usr/local/bin
+  ansible.builtin.copy:
+    src: "/tmp/libvirt_exporter-{{ libvirt_exporter_version }}.linux-amd64/libvirt_exporter"
+    dest: "/usr/local/bin/libvirt_exporter"
+    mode: '0755'
+    remote_src: true
+
 - name: Create Prometheus systemd service unit
   ansible.builtin.copy:
     dest: /etc/systemd/system/prometheus.service
@@ -69,6 +83,23 @@
       [Install]
       WantedBy=multi-user.target
 
+- name: Create Libvirt Exporter systemd service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/libvirt-exporter.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus Libvirt Exporter
+      After=network.target
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/local/bin/libvirt_exporter
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+
 - name: Deploy Prometheus configuration (prometheus.yml)
   ansible.builtin.template:
     src: prometheus.yml.j2
@@ -90,7 +121,7 @@
     mode: '0644'
   notify: Restart alertmanager
 
-- name: Ensure Prometheus and Alertmanager services are running and enabled
+- name: Ensure Prometheus, Alertmanager, and Libvirt Exporter services are running and enabled
   ansible.builtin.systemd:
     name: "{{ item }}"
     state: started
@@ -99,3 +130,4 @@
   loop:
     - prometheus
     - alertmanager
+    - libvirt-exporter

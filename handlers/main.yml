@@ -16,6 +16,12 @@
     state: restarted
     daemon_reload: true
 
+- name: Restart libvirt-exporter
+  ansible.builtin.systemd:
+    name: libvirt-exporter
+    state: restarted
+    daemon_reload: true
+
 - name: Restart heat-signal-adapter
   ansible.builtin.systemd:
     name: heat-signal-adapter
