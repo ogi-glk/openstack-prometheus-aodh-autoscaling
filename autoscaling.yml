@@ -6,7 +6,7 @@
 #   ansible-playbook -i <inventory> autoscaling.yml
 # ==============================================================================
 - name: Deploy OpenStack Prometheus Autoscaling Layer
-  hosts: "{{ autoscaling_target_hosts | default('compute_hosts:all[0]') }}"
+  hosts: "{{ autoscaling_target_hosts | default('compute_hosts') }}"
   become: true
   roles:
     - role: "{{ playbook_dir }}"
