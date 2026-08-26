@@ -54,7 +54,8 @@
     owner: "{{ autoscaling_service_user }}"
     group: "{{ autoscaling_service_group }}"
 
-- name: Sanitize openrc file against Windows UTF-8 BOM and CRLF line endings
-  ansible.builtin.shell:
-    cmd: "sed -i '1s/^\xef\xbb\xbf//; s/\r$//' {{ autoscaling_install_dir }}/openrc"
+- name: Sanitize openrc file against Windows line endings and BOM
+  ansible.builtin.shell: |
+    tr -d '\r' < {{ autoscaling_install_dir }}/openrc > /tmp/openrc.clean && mv /tmp/openrc.clean {{ autoscaling_install_dir }}/openrc
+    sed -i '1s/^\xef\xbb\xbf//' {{ autoscaling_install_dir }}/openrc 2>/dev/null || true
   changed_when: false

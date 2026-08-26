@@ -5,8 +5,17 @@
   when: heat_scaleup_url == "" and heat_stack_name != ""
   block:
     - name: Verify Heat Stack existence
-      ansible.builtin.command:
-        cmd: "openstack stack show {{ heat_stack_name }} -f value -c stack_status"
+      ansible.builtin.shell: |
+        if command -v openstack >/dev/null 2>&1; then
+          openstack stack show {{ heat_stack_name }} -f value -c stack_status
+        else
+          CONTAINER=$(lxc-ls -1 2>/dev/null | grep utility | head -n 1)
+          if [ -n "$CONTAINER" ]; then
+            lxc-attach -n "$CONTAINER" -- bash -c "source /root/openrc && openstack stack show {{ heat_stack_name }} -f value -c stack_status"
+          else
+            echo "STACK_NOT_FOUND"
+          fi
+        fi
       environment:
         OS_AUTH_URL: "{{ openstack_auth_url }}"
         OS_USERNAME: "{{ openstack_username }}"
@@ -19,9 +28,14 @@
       changed_when: false
 
     - name: Fetch Scale-Up URL
-      when: _stack_check.rc == 0
-      ansible.builtin.command:
-        cmd: "openstack stack output show {{ heat_stack_name }} scaleup_url -f value -c output_value"
+      when: _stack_check.rc == 0 and "STACK_NOT_FOUND" not in _stack_check.stdout
+      ansible.builtin.shell: |
+        if command -v openstack >/dev/null 2>&1; then
+          openstack stack output show {{ heat_stack_name }} scaleup_url -f value -c output_value
+        else
+          CONTAINER=$(lxc-ls -1 2>/dev/null | grep utility | head -n 1)
+          lxc-attach -n "$CONTAINER" -- bash -c "source /root/openrc && openstack stack output show {{ heat_stack_name }} scaleup_url -f value -c output_value"
+        fi
       environment:
         OS_AUTH_URL: "{{ openstack_auth_url }}"
         OS_USERNAME: "{{ openstack_username }}"
@@ -33,9 +47,14 @@
       changed_when: false
 
     - name: Fetch Scale-Down URL
-      when: _stack_check.rc == 0
-      ansible.builtin.command:
-        cmd: "openstack stack output show {{ heat_stack_name }} scaledown_url -f value -c output_value"
+      when: _stack_check.rc == 0 and "STACK_NOT_FOUND" not in _stack_check.stdout
+      ansible.builtin.shell: |
+        if command -v openstack >/dev/null 2>&1; then
+          openstack stack output show {{ heat_stack_name }} scaledown_url -f value -c output_value
+        else
+          CONTAINER=$(lxc-ls -1 2>/dev/null | grep utility | head -n 1)
+          lxc-attach -n "$CONTAINER" -- bash -c "source /root/openrc && openstack stack output show {{ heat_stack_name }} scaledown_url -f value -c output_value"
+        fi
       environment:
         OS_AUTH_URL: "{{ openstack_auth_url }}"
         OS_USERNAME: "{{ openstack_username }}"
@@ -47,7 +66,7 @@
       changed_when: false
 
     - name: Save discovered Heat Webhook URLs
-      when: _stack_check.rc == 0
+      when: _scaleup_res is defined and _scaleup_res.stdout is defined and _scaleup_res.stdout != ""
       ansible.builtin.set_fact:
         heat_scaleup_url: "{{ _scaleup_res.stdout }}"
         heat_scaledown_url: "{{ _scaledown_res.stdout }}"
