@@ -1,0 +1,32 @@
+[DEFAULT]
+debug = false
+transport_url = rabbit://{{ aodh_rabbit_user }}:{{ aodh_rabbit_password }}@{{ aodh_rabbit_host }}:5672/
+auth_strategy = keystone
+
+[database]
+connection = mysql+pymysql://{{ aodh_db_user }}:{{ aodh_db_password }}@{{ aodh_db_host }}/{{ aodh_db_name }}
+
+[keystone_authtoken]
+auth_type = password
+auth_url = {{ openstack_auth_url }}
+username = {{ aodh_service_user }}
+password = {{ aodh_service_password }}
+user_domain_name = {{ openstack_user_domain_name }}
+project_name = {{ aodh_service_project }}
+project_domain_name = {{ openstack_project_domain_name }}
+
+[service_credentials]
+auth_type = password
+auth_url = {{ openstack_auth_url }}
+username = {{ aodh_service_user }}
+password = {{ aodh_service_password }}
+user_domain_name = {{ openstack_user_domain_name }}
+project_name = {{ aodh_service_project }}
+project_domain_name = {{ openstack_project_domain_name }}
+
+[api]
+port = {{ aodh_port }}
+host = 0.0.0.0
+
+[prometheus]
+url = {{ aodh_prometheus_url }}

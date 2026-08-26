@@ -1,28 +1,116 @@
 ---
-# tasks/aodh.yml - Configure OpenStack Aodh for Prometheus Integration
+# tasks/aodh.yml - Idempotent OpenStack Aodh Automated Setup & Prometheus Integration
 
-- name: Check if /etc/aodh/aodh.conf exists
+# 1. TESPİT: Aodh sistemde zaten kurulu mu?
+- name: Check if aodh-evaluator binary is already installed
+  ansible.builtin.command: which aodh-evaluator
+  register: aodh_evaluator_check
+  failed_when: false
+  changed_when: false
+
+- name: Check if /etc/aodh/aodh.conf already exists
   ansible.builtin.stat:
     path: /etc/aodh/aodh.conf
   register: aodh_conf_stat
 
-- name: Configure Prometheus URL in /etc/aodh/aodh.conf
+- name: Set fact whether Aodh is already installed
+  ansible.builtin.set_fact:
+    aodh_is_installed: "{{ aodh_evaluator_check.rc == 0 and aodh_conf_stat.stat.exists }}"
+
+- name: Announce Aodh detection result
+  ansible.builtin.debug:
+    msg: >
+      {% if aodh_is_installed %}
+      [+] Aodh is ALREADY installed. Skipping package and Keystone setup, applying Prometheus configuration.
+      {% else %}
+      [*] Aodh is NOT installed. Starting full automated installation (Packages, Keystone, Database, Config).
+      {% endif %}
+
+# 2. KURULUM (Sadece Aodh kurulu değilse çalışır)
+- name: Install Aodh system packages via APT
+  ansible.builtin.apt:
+    name:
+      - aodh-api
+      - aodh-evaluator
+      - aodh-notifier
+      - aodh-listener
+      - python3-aodhclient
+      - crudini
+    state: present
+    update_cache: true
+  when: not aodh_is_installed
+
+- name: Ensure /etc/aodh directory exists
+  ansible.builtin.file:
+    path: /etc/aodh
+    state: directory
+    mode: '0750'
+    owner: aodh
+    group: aodh
+  when: not aodh_is_installed
+
+- name: Setup Keystone Service, User and Endpoints for Aodh
+  ansible.builtin.shell: |
+    source {{ autoscaling_install_dir }}/openrc
+
+    # 1. Service oluştur (yoksa)
+    openstack service show alarming >/dev/null 2>&1 || \
+      openstack service create --name aodh --description "OpenStack Alarming Service" alarming
+
+    # 2. Service kullanıcısı oluştur (yoksa)
+    openstack user show {{ aodh_service_user }} >/dev/null 2>&1 || \
+      openstack user create --domain default --password "{{ aodh_service_password }}" {{ aodh_service_user }}
+
+    # 3. Admin rolü ver
+    openstack role add --project {{ aodh_service_project }} --user {{ aodh_service_user }} admin
+
+    # 4. Endpoints oluştur (yoksa)
+    ENDPOINT_EXISTS=$(openstack endpoint list --service alarming -f value -c ID | wc -l)
+    if [ "$ENDPOINT_EXISTS" -eq 0 ]; then
+      openstack endpoint create --region RegionOne alarming public "http://{{ aodh_db_host }}:{{ aodh_port }}"
+      openstack endpoint create --region RegionOne alarming internal "http://{{ aodh_db_host }}:{{ aodh_port }}"
+      openstack endpoint create --region RegionOne alarming admin "http://{{ aodh_db_host }}:{{ aodh_port }}"
+    fi
+  when: not aodh_is_installed
+  failed_when: false
+
+- name: Deploy full aodh.conf configuration
+  ansible.builtin.template:
+    src: aodh.conf.j2
+    dest: /etc/aodh/aodh.conf
+    owner: aodh
+    group: aodh
+    mode: '0640'
+  when: not aodh_is_installed
+
+- name: Run Aodh Database Sync (dbsync)
+  ansible.builtin.command: su -s /bin/sh -c "aodh-dbsync" aodh
+  when: not aodh_is_installed
+  failed_when: false
+
+- name: Enable and start all Aodh systemd services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+    daemon_reload: true
+  loop:
+    - aodh-api
+    - aodh-evaluator
+    - aodh-notifier
+    - aodh-listener
+  when: not aodh_is_installed
+
+# 3. YAPILANDIRMA (Aodh zaten varsa veya yeni kurulduysa her zaman çalışır)
+- name: Ensure Prometheus URL is configured in /etc/aodh/aodh.conf
   community.general.ini_file:
     path: /etc/aodh/aodh.conf
     section: prometheus
     option: url
     value: "{{ aodh_prometheus_url }}"
     mode: '0640'
-  when: aodh_conf_stat.stat.exists
+    owner: aodh
+    group: aodh
   notify:
     - Restart aodh-evaluator
     - Restart aodh-notifier
-
-- name: Display Aodh integration status
-  ansible.builtin.debug:
-    msg: >
-      {% if aodh_conf_stat.stat.exists %}
-      Aodh configuration (/etc/aodh/aodh.conf) updated with [prometheus] url = {{ aodh_prometheus_url }}
-      {% else %}
-      Notice: /etc/aodh/aodh.conf not found on this host. If Aodh is running inside an LXC container, run this configuration inside the aodh container.
-      {% endif %}

@@ -25,5 +25,16 @@ openstack_project_name: "admin"
 openstack_user_domain_name: "Default"
 openstack_project_domain_name: "Default"
 
-# 4. Aodh Prometheus Integration
-aodh_prometheus_url: "http://{{ internal_lb_vip_address | default('172.29.236.101') }}:9090"
+# 4. Aodh Automatic Installation & Configuration Settings
+aodh_port: 8042
+aodh_service_user: "aodh"
+aodh_service_project: "service"
+aodh_service_password: "{{ aodh_auth_password | default('AodhSecretPassword123!') }}"
+aodh_db_user: "aodh"
+aodh_db_password: "{{ aodh_database_password | default('AodhDbSecretPassword123!') }}"
+aodh_db_name: "aodh"
+aodh_db_host: "{{ internal_lb_vip_address | default('172.29.236.101') }}"
+aodh_rabbit_user: "openstack"
+aodh_rabbit_password: "{{ rabbitmq_password | default('RabbitSecretPassword123!') }}"
+aodh_rabbit_host: "{{ internal_lb_vip_address | default('172.29.236.101') }}"
+aodh_prometheus_url: "http://localhost:9090"
