@@ -1,0 +1,105 @@
+heat_template_version: 2018-08-31
+description: >
+  OpenStack Autoscaling HOT Template using native Aodh PrometheusAlarm (OS::Aodh::PrometheusAlarm).
+  Evaluates CPU metrics collected by Prometheus and libvirt-exporter, mapped by server_group_exporter.
+
+parameters:
+  image:
+    type: string
+    default: cirros
+    description: Image name or ID for instances
+  flavor:
+    type: string
+    default: m1.tiny
+    description: Flavor for instances
+  network:
+    type: string
+    default: test-net
+    description: Network for instances
+  cpu_high_threshold:
+    type: number
+    default: 70
+    description: Scale-Out CPU percentage threshold
+  cpu_low_threshold:
+    type: number
+    default: 20
+    description: Scale-In CPU percentage threshold
+
+resources:
+  asg:
+    type: OS::Heat::AutoScalingGroup
+    properties:
+      min_size: 1
+      max_size: 3
+      desired_capacity: 1
+      cooldown: 60
+      resource:
+        type: OS::Nova::Server
+        properties:
+          name: asg-vm
+          image: { get_param: image }
+          flavor: { get_param: flavor }
+          networks:
+            - network: { get_param: network }
+          metadata:
+            metering.server_group: { get_param: "OS::stack_id" }
+
+  scaleup_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: { get_resource: asg }
+      scaling_adjustment: 1
+      cooldown: 60
+
+  scaledown_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: { get_resource: asg }
+      scaling_adjustment: -1
+      cooldown: 60
+
+  # ============================================================================
+  # AODH PROMETHEUS ALARMS
+  # Uses OS::Aodh::PrometheusAlarm to query Prometheus PromQL directly!
+  # Injects this stack's unique UUID dynamically via str_replace and OS::stack_id.
+  # ============================================================================
+  cpu_alarm_high:
+    type: OS::Aodh::PrometheusAlarm
+    properties:
+      description: "Scale-Out when stack average CPU exceeds threshold"
+      comparison_operator: gt
+      threshold: { get_param: cpu_high_threshold }
+      query:
+        str_replace:
+          template: "avg(rate(libvirt_domain_info_cpu_time_seconds_total[1m]) * 100 * on(domain) group_left(server_group) openstack_instance_server_group{server_group='MY_STACK_ID'})"
+          params:
+            MY_STACK_ID: { get_param: "OS::stack_id" }
+      alarm_actions:
+        - { get_attr: [scaleup_policy, signal_url] }
+
+  cpu_alarm_low:
+    type: OS::Aodh::PrometheusAlarm
+    properties:
+      description: "Scale-In when stack average CPU drops below threshold"
+      comparison_operator: lt
+      threshold: { get_param: cpu_low_threshold }
+      query:
+        str_replace:
+          template: "avg(rate(libvirt_domain_info_cpu_time_seconds_total[1m]) * 100 * on(domain) group_left(server_group) openstack_instance_server_group{server_group='MY_STACK_ID'})"
+          params:
+            MY_STACK_ID: { get_param: "OS::stack_id" }
+      alarm_actions:
+        - { get_attr: [scaledown_policy, signal_url] }
+
+outputs:
+  asg_size:
+    description: Current AutoScalingGroup instance count
+    value: { get_attr: [asg, current_size] }
+  scaleup_signal_url:
+    description: Scale-Up Policy Signal URL
+    value: { get_attr: [scaleup_policy, signal_url] }
+  scaledown_signal_url:
+    description: Scale-Down Policy Signal URL
+    value: { get_attr: [scaledown_policy, signal_url] }

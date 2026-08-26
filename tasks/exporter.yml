@@ -1,0 +1,25 @@
+---
+# tasks/exporter.yml - Nova Server Group Exporter Setup
+
+- name: Deploy Nova Server Group exporter script
+  ansible.builtin.copy:
+    src: "exporters/server_group_exporter.py"
+    dest: "{{ autoscaling_install_dir }}/exporters/server_group_exporter.py"
+    mode: '0755'
+    owner: "{{ autoscaling_service_user }}"
+    group: "{{ autoscaling_service_group }}"
+  notify: Restart server-group-exporter
+
+- name: Deploy Server Group Exporter systemd service unit
+  ansible.builtin.template:
+    src: server-group-exporter.service.j2
+    dest: /etc/systemd/system/server-group-exporter.service
+    mode: '0644'
+  notify: Restart server-group-exporter
+
+- name: Ensure Server Group Exporter service is enabled and started
+  ansible.builtin.systemd:
+    name: server-group-exporter
+    state: started
+    enabled: true
+    daemon_reload: true

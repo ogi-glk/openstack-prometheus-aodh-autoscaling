@@ -1,0 +1,28 @@
+---
+# tasks/aodh.yml - Configure OpenStack Aodh for Prometheus Integration
+
+- name: Check if /etc/aodh/aodh.conf exists
+  ansible.builtin.stat:
+    path: /etc/aodh/aodh.conf
+  register: aodh_conf_stat
+
+- name: Configure Prometheus URL in /etc/aodh/aodh.conf
+  community.general.ini_file:
+    path: /etc/aodh/aodh.conf
+    section: prometheus
+    option: url
+    value: "{{ aodh_prometheus_url }}"
+    mode: '0640'
+  when: aodh_conf_stat.stat.exists
+  notify:
+    - Restart aodh-evaluator
+    - Restart aodh-notifier
+
+- name: Display Aodh integration status
+  ansible.builtin.debug:
+    msg: >
+      {% if aodh_conf_stat.stat.exists %}
+      Aodh configuration (/etc/aodh/aodh.conf) updated with [prometheus] url = {{ aodh_prometheus_url }}
+      {% else %}
+      Notice: /etc/aodh/aodh.conf not found on this host. If Aodh is running inside an LXC container, run this configuration inside the aodh container.
+      {% endif %}

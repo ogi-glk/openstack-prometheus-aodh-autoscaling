@@ -1,20 +1,21 @@
 ---
-# os_prometheus_autoscaling / tasks / main.yml
+# os_prometheus_aodh_autoscaling / tasks / main.yml
 # ==============================================================================
-# OpenStack Prometheus Autoscaling Deployment Tasks
+# Main Task Execution Sequence
 # ==============================================================================
 
-- name: 1. Install prerequisites and system packages
+- name: Gather prerequisites, directories and install libvirt-exporter
   ansible.builtin.import_tasks: prerequisites.yml
-  tags:
-    - autoscaling-prereqs
+  tags: [prerequisites, autoscaling]
 
-- name: 2. Deploy Prometheus and Alertmanager
+- name: Install and configure Prometheus server
   ansible.builtin.import_tasks: prometheus.yml
-  tags:
-    - autoscaling-prometheus
+  tags: [prometheus, autoscaling]
 
-- name: 3. Deploy Heat Webhook Adapter and Exporter services
-  ansible.builtin.import_tasks: adapter.yml
-  tags:
-    - autoscaling-adapter
+- name: Install and start Server Group Exporter
+  ansible.builtin.import_tasks: exporter.yml
+  tags: [exporter, autoscaling]
+
+- name: Configure OpenStack Aodh for Prometheus integration
+  ansible.builtin.import_tasks: aodh.yml
+  tags: [aodh, autoscaling]

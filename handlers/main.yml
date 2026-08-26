@@ -1,35 +1,24 @@
 ---
-# os_prometheus_autoscaling / handlers / main.yml
-# ==============================================================================
-# Service Restart Handlers
-# ==============================================================================
+# handlers/main.yml
 
 - name: Restart prometheus
   ansible.builtin.systemd:
     name: prometheus
     state: restarted
-    daemon_reload: true
-
-- name: Restart alertmanager
-  ansible.builtin.systemd:
-    name: alertmanager
-    state: restarted
-    daemon_reload: true
-
-- name: Restart prometheus-libvirt-exporter
-  ansible.builtin.systemd:
-    name: prometheus-libvirt-exporter
-    state: restarted
-    daemon_reload: true
-
-- name: Restart heat-signal-adapter
-  ansible.builtin.systemd:
-    name: heat-signal-adapter
-    state: restarted
-    daemon_reload: true
 
 - name: Restart server-group-exporter
   ansible.builtin.systemd:
     name: server-group-exporter
     state: restarted
-    daemon_reload: true
+
+- name: Restart aodh-evaluator
+  ansible.builtin.systemd:
+    name: aodh-evaluator
+    state: restarted
+  failed_when: false
+
+- name: Restart aodh-notifier
+  ansible.builtin.systemd:
+    name: aodh-notifier
+    state: restarted
+  failed_when: false
