@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Alertmanager -> Heat Webhook Adapter
-------------------------------------
-Alertmanager alarm verdiğinde :9200 portuna POST atar.
-Bu adapter:
-1. Gelen alert'in adını okur (CpuHigh veya CpuLow).
-2. Keystone'dan taze bir yetkilendirme token'ı alır.
-3. Heat'in scaleup_policy veya scaledown_policy signal URL'ine kimlik doğrulamalı POST atar.
+Alertmanager -> Heat Webhook Signal Adapter
+-------------------------------------------
+Alertmanager issues POST notifications to :9200 upon threshold breaches.
+This adapter:
+1. Parses alertname (CpuHigh or CpuLow).
+2. Obtains a valid Keystone authentication token.
+3. Forwards an authenticated POST request to Heat scaling policy signal URL.
 """
 
 import os
@@ -18,14 +18,14 @@ import ssl
 
 LISTEN_PORT = 9200
 
-# URL yapılandırması ortam değişkeninden veya doğrudan dosyadan okunabilir
+# URL configuration read from environment or fallback defaults
 SIGNAL_URLS = {
-    "CpuHigh": os.environ.get("HEAT_SCALEUP_URL", "https://10.8.133.99:8004/v1/b7966dc0e8c14e1494c1558c641a1030/stacks/lab-asg/fddfc109-f9b3-4171-94d1-1f2ca66a5759/resources/scaleup_policy/signal"),
-    "CpuLow":  os.environ.get("HEAT_SCALEDOWN_URL", "https://10.8.133.99:8004/v1/b7966dc0e8c14e1494c1558c641a1030/stacks/lab-asg/fddfc109-f9b3-4171-94d1-1f2ca66a5759/resources/scaledown_policy/signal")
+    "CpuHigh": os.environ.get("HEAT_SCALEUP_URL", ""),
+    "CpuLow":  os.environ.get("HEAT_SCALEDOWN_URL", "")
 }
 
 def get_openstack_token():
-    """Keystone'dan güncel token çeker"""
+    """Retrieves current Keystone auth token using openstack CLI."""
     cmd = "openstack token issue -f value -c id"
     result = subprocess.run(
         cmd, shell=True,
@@ -52,7 +52,7 @@ class Handler(BaseHTTPRequestHandler):
             target_url = SIGNAL_URLS.get(alertname)
             
             if not target_url:
-                print(f"[!] Bilinmeyen alert: {alertname}")
+                print(f"[!] Unknown or unconfigured alert: {alertname}")
                 continue
 
             try:
@@ -60,15 +60,15 @@ class Handler(BaseHTTPRequestHandler):
                 req = urllib.request.Request(target_url, data=b"", method="POST")
                 req.add_header("X-Auth-Token", token)
                 
-                # Self-signed sertifikaları destekle
+                # Support self-signed SSL certificates in lab environments
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
 
                 with urllib.request.urlopen(req, context=ctx) as resp:
-                    print(f"[+] {alertname} sinyali gonderildi -> Heat HTTP {resp.status}")
+                    print(f"[+] {alertname} signal sent -> Heat HTTP {resp.status}")
             except Exception as e:
-                print(f"[!] {alertname} sinyal iletim hatasi: {e}")
+                print(f"[!] {alertname} signal forwarding error: {e}")
 
         self.send_response(200)
         self.end_headers()
@@ -79,5 +79,5 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     server = HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
-    print(f"[*] heat_signal_adapter :{LISTEN_PORT} uzerinde dinliyor...")
+    print(f"[*] heat_signal_adapter listening on port :{LISTEN_PORT}...")
     server.serve_forever()

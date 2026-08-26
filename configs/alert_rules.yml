@@ -12,7 +12,7 @@ groups:
         labels:
           severity: high
         annotations:
-          summary: "Stack {{ $labels.server_group }} ortalama CPU > %70 -> Scale-Out tetikleniyor"
+          summary: "Stack {{ $labels.server_group }} average CPU > 70% -> Scale-Out triggered"
 
       - alert: CpuLow
         expr: >
@@ -25,4 +25,4 @@ groups:
         labels:
           severity: low
         annotations:
-          summary: "Stack {{ $labels.server_group }} ortalama CPU < %20 -> Scale-In tetikleniyor"
+          summary: "Stack {{ $labels.server_group }} average CPU < 20% -> Scale-In triggered"

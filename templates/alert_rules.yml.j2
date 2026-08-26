@@ -1,7 +1,7 @@
-﻿groups:
+groups:
   - name: autoscaling_rules
     rules:
-      # SCALE-OUT: CPU Kullanımı Eşik Değeri Geçtiğinde Büyüt (+1 VM)
+      # SCALE-OUT: Trigger scale-out (+1 VM) when CPU usage exceeds high threshold
       - alert: CpuHigh
         expr: >
           avg by (server_group) (
@@ -12,10 +12,10 @@
         labels:
           severity: critical
         annotations:
-          summary: "Yüksek CPU Kullanımı: Stack {% raw %}{{ $labels.server_group }}{% endraw %}"
-          description: "Stack CPU kullanımı son {{ autoscaling_evaluation_period }} boyunca %{{ autoscaling_cpu_high_threshold }} üzerinde seyretti (Değer: {% raw %}{{ $value }}{% endraw %}%). Scale-Out tetikleniyor."
+          summary: "High CPU Usage: Stack {% raw %}{{ $labels.server_group }}{% endraw %}"
+          description: "Stack CPU usage has stayed above {{ autoscaling_cpu_high_threshold }}% for {{ autoscaling_evaluation_period }} (Value: {% raw %}{{ $value }}{% endraw %}%). Scale-Out triggered."
 
-      # SCALE-IN: CPU Kullanımı Düşük Eşiğin Altına İndiğinde Küçült (-1 VM)
+      # SCALE-IN: Trigger scale-in (-1 VM) when CPU usage drops below low threshold
       - alert: CpuLow
         expr: >
           avg by (server_group) (
@@ -26,5 +26,5 @@
         labels:
           severity: warning
         annotations:
-          summary: "Düşük CPU Kullanımı: Stack {% raw %}{{ $labels.server_group }}{% endraw %}"
-          description: "Stack CPU kullanımı son {{ autoscaling_evaluation_period }} boyunca %{{ autoscaling_cpu_low_threshold }} altında seyretti (Değer: {% raw %}{{ $value }}{% endraw %}%). Scale-In tetikleniyor."
+          summary: "Low CPU Usage: Stack {% raw %}{{ $labels.server_group }}{% endraw %}"
+          description: "Stack CPU usage has stayed below {{ autoscaling_cpu_low_threshold }}% for {{ autoscaling_evaluation_period }} (Value: {% raw %}{{ $value }}{% endraw %}%). Scale-In triggered."

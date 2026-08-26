@@ -1,7 +1,7 @@
 ---
 # os_prometheus_autoscaling / handlers / main.yml
 # ==============================================================================
-# Servis Yeniden Başlatma Tetikleyicileri
+# Service Restart Handlers
 # ==============================================================================
 
 - name: Restart prometheus

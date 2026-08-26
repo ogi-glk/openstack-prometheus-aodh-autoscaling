@@ -1,12 +1,12 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 OpenStack Nova Metadata -> Prometheus Metric Exporter (TTL Cached)
 ------------------------------------------------------------------
-Bu servis Nova API'ye bağlanır:
-1. Çalışan VM'lerin libvirt domain adını (instance-XXXXXXXX) bulur.
-2. Heat'in eklediği `metering.server_group` (Stack ID) metadata'sını okur.
-3. Nova API'yi yormamak için 60 saniyelik TTL Önbellek (Cache) kullanır.
-4. :9102/metrics portundan `openstack_instance_server_group` metriğini yayınlar.
+This service connects to Nova API:
+1. Locates libvirt domain names (instance-XXXXXXXX) for running VMs.
+2. Reads `metering.server_group` (Heat Stack ID) metadata attached by Heat.
+3. Employs a 60-second TTL cache to prevent overloading Nova API.
+4. Exposes `openstack_instance_server_group` gauge on :9102/metrics.
 """
 
 import os
@@ -15,14 +15,14 @@ import openstack
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 LISTEN_PORT = 9102
-CACHE_TTL = 60  # Önbellek süresi (saniye)
+CACHE_TTL = 60  # Cache TTL in seconds
 
-# Global önbellek değişkenleri
+# Global cache storage
 CACHE_DATA = None
 LAST_FETCH_TIME = 0
 
 def fetch_nova_metrics():
-    """Nova API'ye gidip güncel VM ve Stack ID listesini çeker."""
+    """Queries Nova API to collect current VM list and stack mapping."""
     try:
         auth_url = os.environ.get("OS_AUTH_URL")
         if auth_url:
@@ -40,12 +40,12 @@ def fetch_nova_metrics():
         return f"# Error connecting to OpenStack: {e}\n"
 
     lines = [
-        "# HELP openstack_instance_server_group Nova instance -> Heat stack_id (server_group) eslemesi",
+        "# HELP openstack_instance_server_group Nova instance to Heat stack_id (server_group) mapping",
         "# TYPE openstack_instance_server_group gauge"
     ]
 
     try:
-        # Tüm VM'leri tek seferde detaylı çek
+        # Fetch all servers with detailed metadata
         for server in conn.compute.servers(details=True):
             domain_name = getattr(server, 'instance_name', None) or server.name
             metadata = server.metadata or {}
@@ -63,7 +63,7 @@ def fetch_nova_metrics():
     return "\n".join(lines)
 
 def get_metrics_cached():
-    """Önbellek süresi dolmuşsa Nova'dan çeker, dolmamışsa RAM'den anında döner."""
+    """Returns cached metrics or triggers refresh if TTL has expired."""
     global CACHE_DATA, LAST_FETCH_TIME
     now = time.time()
 
@@ -91,13 +91,13 @@ class MetricsHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format, *args):
-        # HTTP erişim loglarıyla terminali kirletme
+        # Suppress standard HTTP access logs to keep terminal clean
         pass
 
 def run():
     server_address = ("0.0.0.0", LISTEN_PORT)
     httpd = HTTPServer(server_address, MetricsHandler)
-    print(f"[*] Nova Server Group Exporter baslatildi: http://0.0.0.0:{LISTEN_PORT}/metrics")
+    print(f"[*] Nova Server Group Exporter listening on http://0.0.0.0:{LISTEN_PORT}/metrics")
     httpd.serve_forever()
 
 if __name__ == "__main__":

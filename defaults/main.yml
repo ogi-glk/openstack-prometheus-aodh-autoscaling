@@ -1,33 +1,33 @@
-﻿---
+---
 # os_prometheus_autoscaling / defaults / main.yml
 # ==============================================================================
-# Prometheus TabanlÄ± OpenStack Autoscaling VarsayÄ±lan DeÄŸiÅŸkenleri
+# Prometheus-based OpenStack Autoscaling Default Variables
 # ==============================================================================
 
-# 1. Dizin ve KullanÄ±cÄ± YapÄ±landÄ±rmasÄ±
+# 1. Directories and Service User Configuration
 autoscaling_install_dir: "/opt/openstack-autoscaling"
 autoscaling_venv_dir: "/opt/openstack-autoscaling/venv"
 autoscaling_service_user: "root"
 autoscaling_service_group: "root"
 
-# 2. Prometheus & Alertmanager AyarlarÄ±
+# 2. Prometheus and Alertmanager Settings
 prometheus_version: "2.51.0"
 prometheus_port: 9090
 alertmanager_version: "0.27.0"
 alertmanager_port: 9093
 
-# 3. Exporter ve Webhook AdaptÃ¶r PortlarÄ±
+# 3. Exporter and Webhook Adapter Ports
 libvirt_exporter_port: 9177
 server_group_exporter_port: 9102
 heat_signal_adapter_port: 9200
 
-# 4. Autoscaling EÅŸik DeÄŸerleri ve Tetikleme KurallarÄ±
-autoscaling_cpu_high_threshold: 70     # %70'in Ã¼zerine Ã§Ä±karsa (Scale-Out: +1 VM)
-autoscaling_cpu_low_threshold: 20      # %20'nin altÄ±na dÃ¼ÅŸerse (Scale-In: -1 VM)
-autoscaling_evaluation_period: "60s"   # AlarmÄ±n tetiklenmesi iÃ§in gereken sÃ¼re
-autoscaling_alarm_cooldown: "2m"       # Ä°ki alarm arasÄ±ndaki bekleme sÃ¼resi
+# 4. Autoscaling Thresholds and Evaluation Rules
+autoscaling_cpu_high_threshold: 70     # Trigger Scale-Out (+1 VM) when CPU exceeds 70%
+autoscaling_cpu_low_threshold: 20      # Trigger Scale-In (-1 VM) when CPU falls below 20%
+autoscaling_evaluation_period: "60s"   # Evaluation window duration
+autoscaling_alarm_cooldown: "2m"       # Cooldown period between successive alarms
 
-# 5. OpenStack Keystone ve Heat YapÄ±landÄ±rmasÄ±
+# 5. OpenStack Keystone and Heat Configuration
 openstack_auth_url: "http://{{ internal_lb_vip_address | default('172.29.236.101') }}:5000/v3"
 openstack_username: "admin"
 openstack_password: "{{ keystone_auth_admin_password | default('') }}"
@@ -35,8 +35,7 @@ openstack_project_name: "admin"
 openstack_user_domain_name: "Default"
 openstack_project_domain_name: "Default"
 
-# 6. Heat Stack ve Webhook URL'leri (Otomatik KeÅŸfedilir veya Elle Girilebilir)
+# 6. Heat Stack and Webhook URLs (Auto-discovered or Manually Specified)
 heat_stack_name: "autoscaling-stack"
 heat_scaleup_url: ""
 heat_scaledown_url: ""
-
