@@ -21,7 +21,7 @@
   ansible.builtin.debug:
     msg: >
       {% if aodh_is_installed %}
-      [+] Aodh is ALREADY installed. Skipping package and Keystone setup, applying Prometheus configuration.
+      [+] Aodh binaries and config detected. Applying/verifying configuration and services.
       {% else %}
       [*] Aodh is NOT installed. Starting full automated installation (Packages, Keystone, Database, Config).
       {% endif %}
@@ -71,7 +71,6 @@
       openstack endpoint create --region RegionOne alarming internal "http://{{ aodh_db_host }}:{{ aodh_port }}"
       openstack endpoint create --region RegionOne alarming admin "http://{{ aodh_db_host }}:{{ aodh_port }}"
     fi
-  when: not aodh_is_installed
   failed_when: false
 
 - name: Deploy full aodh.conf configuration
@@ -85,23 +84,30 @@
 
 - name: Run Aodh Database Sync (dbsync)
   ansible.builtin.command: su -s /bin/sh -c "aodh-dbsync" aodh
-  when: not aodh_is_installed
   failed_when: false
 
-- name: Enable and start all Aodh systemd services
+# 3. SERVİS BAŞLATMA (Ubuntu'da aodh-api Apache2 mod_wsgi üzerinden çalışır)
+- name: Enable aodh-api site in Apache2 and start web server
+  ansible.builtin.shell: |
+    if [ -f /etc/apache2/sites-available/aodh-api.conf ]; then
+      a2ensite aodh-api 2>/dev/null || true
+      systemctl enable --now apache2 2>/dev/null || true
+      systemctl restart apache2 2>/dev/null || true
+    fi
+  failed_when: false
+
+- name: Enable and start Aodh background daemon services
   ansible.builtin.systemd:
     name: "{{ item }}"
     state: started
     enabled: true
     daemon_reload: true
   loop:
-    - aodh-api
     - aodh-evaluator
     - aodh-notifier
     - aodh-listener
-  when: not aodh_is_installed
 
-# 3. YAPILANDIRMA (Aodh zaten varsa veya yeni kurulduysa her zaman çalışır)
+# 4. PROMETHEUS ENTEGRASYONU (Her zaman doğrulanır)
 - name: Ensure Prometheus URL is configured in /etc/aodh/aodh.conf
   community.general.ini_file:
     path: /etc/aodh/aodh.conf
