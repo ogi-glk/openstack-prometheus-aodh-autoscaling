@@ -2,9 +2,9 @@
 """
 OpenStack Nova Metadata -> Prometheus Metric Exporter (TTL Caching Background Worker)
 -------------------------------------------------------------------------------------
-Polls Nova API in a background thread every CACHE_TTL seconds (default: 60s)
-to minimize Nova API overhead by 75%, while serving Prometheus HTTP scrapes
-instantly (<1ms) from in-memory RAM cache.
+Polls Nova API in a background thread every CACHE_TTL seconds (default: 60s).
+Filters ONLY instances belonging to Heat AutoScaling groups (metering.server_group).
+Non-Heat standalone VMs are cleanly excluded (no 'unknown' labels).
 Exposes `openstack_instance_server_group` gauge on :9102/metrics.
 """
 
@@ -45,7 +45,8 @@ def poll_nova_loop():
             for server in conn.compute.servers(details=True):
                 domain_name = getattr(server, 'instance_name', None) or server.name
                 metadata = server.metadata or {}
-                server_group = metadata.get("metering.server_group", "unknown")
+                # ONLY include instances that have a valid Heat server_group metadata
+                server_group = metadata.get("metering.server_group")
                 instance_id = server.id
 
                 if domain_name and server_group:
