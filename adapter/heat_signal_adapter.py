@@ -1,50 +1,47 @@
 #!/usr/bin/env python3
 """
-Alertmanager -> Heat Webhook Signal Adapter
--------------------------------------------
-Alertmanager sends POST alerts to :9200 upon threshold breaches.
-This adapter:
-1. Catches alertname (CpuHigh or CpuLow).
-2. Authenticates with Keystone via openstacksdk to fetch a fresh valid token.
-3. Attaches X-Auth-Token header and forwards POST request to Heat scaling policy URL.
+Alertmanager -> OpenStack Native Heat Signal Adapter
+---------------------------------------------------
+Receives webhook alerts from Alertmanager on :9200.
+Translates alerts to native OpenStack Heat resource signals via openstacksdk:
+- CpuHigh -> autoscaling-stack / scaleup_policy
+- CpuLow  -> autoscaling-stack / scaledown_policy
 """
 
 import os
 import sys
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import urllib.request
-import ssl
+import openstack
 
 LISTEN_PORT = int(os.environ.get("ADAPTER_PORT", 9200))
+STACK_NAME = os.environ.get("HEAT_STACK_NAME", "autoscaling-stack")
 
-SIGNAL_URLS = {
-    "CpuHigh": os.environ.get("HEAT_SCALEUP_URL", ""),
-    "CpuLow":  os.environ.get("HEAT_SCALEDOWN_URL", "")
-}
+def get_openstack_conn():
+    """Establishes authenticated OpenStack SDK connection using environment variables."""
+    auth_url = os.environ.get("OS_AUTH_URL")
+    if auth_url:
+        return openstack.connect(
+            auth_url=auth_url,
+            project_name=os.environ.get("OS_PROJECT_NAME", "admin"),
+            username=os.environ.get("OS_USERNAME", "admin"),
+            password=os.environ.get("OS_PASSWORD", ""),
+            user_domain_name=os.environ.get("OS_USER_DOMAIN_NAME", "Default"),
+            project_domain_name=os.environ.get("OS_PROJECT_DOMAIN_NAME", "Default"),
+        )
+    return openstack.connect(cloud="envvars")
 
-def get_openstack_token():
-    """Retrieves fresh Keystone auth token using openstacksdk."""
-    try:
-        import openstack
-        auth_url = os.environ.get("OS_AUTH_URL")
-        if auth_url:
-            conn = openstack.connect(
-                auth_url=auth_url,
-                project_name=os.environ.get("OS_PROJECT_NAME", "admin"),
-                username=os.environ.get("OS_USERNAME", "admin"),
-                password=os.environ.get("OS_PASSWORD", ""),
-                user_domain_name=os.environ.get("OS_USER_DOMAIN_NAME", "Default"),
-                project_domain_name=os.environ.get("OS_PROJECT_DOMAIN_NAME", "Default"),
-            )
-        else:
-            conn = openstack.connect(cloud="envvars")
-        
-        token = conn.session.get_token() if hasattr(conn, 'session') else getattr(conn, 'auth_token', None)
-        return token
-    except Exception as e:
-        print(f"[!] Warning: Unable to acquire Keystone token: {e}", flush=True)
-        return None
+def signal_heat_resource(resource_name):
+    """Signals Heat ScalingPolicy via native Heat REST API."""
+    conn = get_openstack_conn()
+    stack = conn.orchestration.find_stack(STACK_NAME)
+    if not stack:
+        raise ValueError(f"Stack '{STACK_NAME}' not found in OpenStack Orchestration service")
+
+    # POST to native Heat signal endpoint: /stacks/{stack_name}/{stack_id}/resources/{resource_name}/signal
+    endpoint = f"/stacks/{stack.name}/{stack.id}/resources/{resource_name}/signal"
+    resp = conn.orchestration.post(endpoint)
+    return resp.status_code if hasattr(resp, 'status_code') else 200
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
@@ -62,29 +59,17 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             
             alertname = alert.get("labels", {}).get("alertname")
-            target_url = SIGNAL_URLS.get(alertname) or os.environ.get("HEAT_SCALEUP_URL" if alertname == "CpuHigh" else "HEAT_SCALEDOWN_URL", "")
+            resource_name = "scaleup_policy" if alertname == "CpuHigh" else "scaledown_policy" if alertname == "CpuLow" else None
             
-            if not target_url:
-                print(f"[!] Unknown or unconfigured alert: {alertname}", flush=True)
+            if not resource_name:
+                print(f"[!] Unknown alert '{alertname}', skipping", flush=True)
                 continue
 
             try:
-                req = urllib.request.Request(target_url, data=b"", method="POST")
-                
-                # Always fetch and attach fresh Keystone token as requested
-                token = get_openstack_token()
-                if token:
-                    req.add_header("X-Auth-Token", token)
-                
-                # Support self-signed SSL certificates in lab environments
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-
-                with urllib.request.urlopen(req, context=ctx) as resp:
-                    print(f"[+] {alertname} signal successfully forwarded -> Heat HTTP {resp.status}", flush=True)
+                status = signal_heat_resource(resource_name)
+                print(f"[+] SUCCESS: {alertname} -> Native Heat signal '{resource_name}' triggered (HTTP {status})", flush=True)
             except Exception as e:
-                print(f"[!] {alertname} signal forwarding error: {e}", flush=True)
+                print(f"[!] ERROR: Failed to forward {alertname} signal to Heat: {e}", flush=True)
 
         self.send_response(200)
         self.end_headers()
@@ -94,6 +79,6 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 if __name__ == "__main__":
-    print(f"[*] heat_signal_adapter listening on port :{LISTEN_PORT}...", flush=True)
+    print(f"[*] Native Heat Signal Adapter listening on port :{LISTEN_PORT} for stack '{STACK_NAME}'...", flush=True)
     server = HTTPServer(("0.0.0.0", LISTEN_PORT), Handler)
     server.serve_forever()
