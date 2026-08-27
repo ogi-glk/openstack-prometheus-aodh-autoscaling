@@ -78,7 +78,7 @@ resources:
           params:
             MY_STACK_ID: { get_param: "OS::stack_id" }
       alarm_actions:
-        - { get_attr: [scaleup_policy, signal_url] }
+        - { get_attr: [scaleup_policy, alarm_url] }
 
   cpu_alarm_low:
     type: OS::Aodh::PrometheusAlarm
@@ -93,7 +93,7 @@ resources:
           params:
             MY_STACK_ID: { get_param: "OS::stack_id" }
       alarm_actions:
-        - { get_attr: [scaledown_policy, signal_url] }
+        - { get_attr: [scaledown_policy, alarm_url] }
 
 outputs:
   asg_size:
@@ -101,7 +101,7 @@ outputs:
     value: { get_attr: [asg, current_size] }
   scaleup_signal_url:
     description: Scale-Up Policy Signal URL
-    value: { get_attr: [scaleup_policy, signal_url] }
+    value: { get_attr: [scaleup_policy, alarm_url] }
   scaledown_signal_url:
     description: Scale-Down Policy Signal URL
-    value: { get_attr: [scaledown_policy, signal_url] }
+    value: { get_attr: [scaledown_policy, alarm_url] }
