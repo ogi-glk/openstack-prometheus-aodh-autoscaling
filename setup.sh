@@ -61,6 +61,14 @@ systemctl daemon-reload
 systemctl enable --now prometheus
 
 # 8. Configure Aodh if aodh.conf exists
+mkdir -p /etc/openstack
+cat <<EOF > /etc/openstack/prometheus.yaml
+host: 127.0.0.1
+port: 9090
+EOF
+chmod 644 /etc/openstack/prometheus.yaml
+
+if [ -f /etc/aodh/aodh.conf ]; then
 if [ -f /etc/aodh/aodh.conf ]; then
     echo "[*] Configuring [prometheus] in /etc/aodh/aodh.conf..."
     crudini --set /etc/aodh/aodh.conf prometheus url "http://localhost:9090" || true

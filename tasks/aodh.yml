@@ -113,6 +113,23 @@
     - aodh-notifier
     - aodh-listener
 
+- name: Ensure /etc/openstack directory exists
+  ansible.builtin.file:
+    path: /etc/openstack
+    state: directory
+    mode: '0755'
+
+- name: Deploy /etc/openstack/prometheus.yaml configuration for observabilityclient
+  ansible.builtin.copy:
+    dest: /etc/openstack/prometheus.yaml
+    mode: '0644'
+    content: |
+      host: "{{ aodh_prometheus_host | default('127.0.0.1') }}"
+      port: {{ aodh_prometheus_port | default(9090) }}
+  notify:
+    - Restart aodh-evaluator
+    - Restart aodh-notifier
+
 # 5. PROMETHEUS ENTEGRASYONU (observabilityclient requires explicit host and port)
 - name: Ensure Prometheus host, port and URL are configured in /etc/aodh/aodh.conf
   community.general.ini_file:
