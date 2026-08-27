@@ -163,3 +163,42 @@
                 f.write(content.replace(old, new))
     "
   failed_when: false
+
+# 7. HEAT CFN EC2AUTHTOKEN YAPILANDIRMASI (alarm_url imza doğrulaması için zorunlu)
+- name: Detect Heat API LXC container name
+  ansible.builtin.shell: "lxc-ls -1 | grep heat-api | head -n 1"
+  register: heat_container_name
+  failed_when: false
+  changed_when: false
+
+- name: Ensure Heat CFN ec2authtoken has Keystone service credentials
+  ansible.builtin.shell: |
+    HEAT="{{ heat_container_name.stdout | trim }}"
+    if [ -n "$HEAT" ]; then
+      lxc-attach -n "$HEAT" -- python3 -c "
+    conf_path = '/etc/heat/heat.conf'
+    with open(conf_path) as f:
+        content = f.read()
+    old = '[ec2authtoken]\nauth_uri = http://{{ internal_lb_vip_address | default(\"172.29.236.101\") }}:5000'
+    new = '''[ec2authtoken]
+    auth_uri = http://{{ internal_lb_vip_address | default(\"172.29.236.101\") }}:5000
+    auth_url = {{ openstack_auth_url }}
+    auth_type = password
+    username = heat
+    password = {{ heat_service_password | default(\"CHANGE_ME\") }}
+    project_name = service
+    user_domain_id = default
+    project_domain_id = default'''
+    if 'auth_type' not in content.split('[ec2authtoken]')[-1].split('[')[0]:
+        with open(conf_path, 'w') as f:
+            f.write(content.replace(old, new))
+        print('[+] ec2authtoken credentials added')
+    else:
+        print('[*] ec2authtoken already configured')
+    "
+      lxc-attach -n "$HEAT" -- systemctl restart heat-api-cfn
+      echo "[+] Heat CFN restarted"
+    else
+      echo "[*] No Heat container found, skipping"
+    fi
+  failed_when: false
