@@ -68,6 +68,7 @@ resources:
   cpu_alarm_high:
     type: OS::Aodh::PrometheusAlarm
     properties:
+      repeat_actions: true
       description: "Scale-Out when stack average CPU exceeds threshold"
       comparison_operator: gt
       threshold: { get_param: cpu_high_threshold }
@@ -82,6 +83,7 @@ resources:
   cpu_alarm_low:
     type: OS::Aodh::PrometheusAlarm
     properties:
+      repeat_actions: true
       description: "Scale-In when stack average CPU drops below threshold"
       comparison_operator: lt
       threshold: { get_param: cpu_low_threshold }
