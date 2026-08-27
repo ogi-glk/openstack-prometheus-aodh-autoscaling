@@ -60,7 +60,7 @@ EOF
 systemctl daemon-reload
 systemctl enable --now prometheus
 
-# 8. Configure Aodh if aodh.conf exists
+# 8. Configure Aodh observabilityclient (/etc/openstack/prometheus.yaml)
 mkdir -p /etc/openstack
 cat <<EOF > /etc/openstack/prometheus.yaml
 host: 127.0.0.1
@@ -68,12 +68,55 @@ port: 9090
 EOF
 chmod 644 /etc/openstack/prometheus.yaml
 
-if [ -f /etc/aodh/aodh.conf ]; then
+# 9. Configure Aodh in /etc/aodh/aodh.conf
 if [ -f /etc/aodh/aodh.conf ]; then
     echo "[*] Configuring [prometheus] in /etc/aodh/aodh.conf..."
-    crudini --set /etc/aodh/aodh.conf prometheus url "http://localhost:9090" || true
-    systemctl restart aodh-evaluator aodh-notifier || true
-    echo "[+] Aodh configured to query Prometheus at http://localhost:9090"
+    crudini --set /etc/aodh/aodh.conf prometheus host "127.0.0.1" || true
+    crudini --set /etc/aodh/aodh.conf prometheus port "9090" || true
+    crudini --set /etc/aodh/aodh.conf prometheus url "http://127.0.0.1:9090" || true
+    systemctl restart aodh-evaluator aodh-notifier aodh-listener || true
+    echo "[+] Aodh configured to query Prometheus at http://127.0.0.1:9090"
+fi
+
+# 10. Ubuntu 24.04 osprofiler SQLAlchemy 2.0 chained_exception compatibility patch
+python3 -c "
+import os
+path = '/usr/lib/python3/dist-packages/osprofiler/sqlalchemy.py'
+if os.path.exists(path):
+    with open(path, 'r') as f:
+        content = f.read()
+    old = 'chained_exception = str(exception_context.chained_exception)'
+    new = 'chained_exception = str(getattr(exception_context, \"chained_exception\", getattr(exception_context, \"original_exception\", \"\")))'
+    if old in content:
+        with open(path, 'w') as f:
+            f.write(content.replace(old, new))
+        print('[+] Applied osprofiler SQLAlchemy 2.0 backwards-compatible patch')
+" 2>/dev/null || true
+
+# 11. Configure Heat CFN ec2authtoken credentials if in OpenStack-Ansible LXC environment
+HEAT=$(lxc-ls -1 2>/dev/null | grep heat-api | head -n 1 || true)
+if [ -n "$HEAT" ]; then
+    echo "[*] Configuring Heat CFN ec2authtoken in container: $HEAT..."
+    lxc-attach -n "$HEAT" -- python3 -c "
+conf_path = '/etc/heat/heat.conf'
+with open(conf_path) as f:
+    content = f.read()
+old = '[ec2authtoken]\nauth_uri = http://172.29.236.101:5000'
+new = '''[ec2authtoken]
+auth_uri = http://172.29.236.101:5000
+auth_url = http://172.29.236.101:5000/v3
+auth_type = password
+username = heat
+password = 5391e726a4d236d7587b3c3e6e2b
+project_name = service
+user_domain_id = default
+project_domain_id = default'''
+if 'auth_type' not in content.split('[ec2authtoken]')[-1].split('[')[0]:
+    with open(conf_path, 'w') as f:
+        f.write(content.replace(old, new))
+    print('[+] ec2authtoken credentials configured')
+" 2>/dev/null || true
+    lxc-attach -n "$HEAT" -- systemctl restart heat-api-cfn 2>/dev/null || true
 fi
 
 echo "[+] Prometheus + Aodh Autoscaling setup completed successfully!"
