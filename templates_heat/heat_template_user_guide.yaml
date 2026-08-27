@@ -1,0 +1,133 @@
+heat_template_version: 2021-04-16
+
+description: >
+  MUSTERI VE GELISTIRICI REHBERI:
+  Mevcut standart bir Heat sablonunu Prometheus + Aodh Autoscaling
+  ve Autohealing mimarisine uyarlamak icin gereken "EKSTRA" bloklar.
+  
+  [STANDART]: Musterinin kendi uygulamasina gore serbestce belirledigi alanlar.
+  [EKSTRA]:   Mimarimizle calisabilmesi icin eklenmesi ZORUNLU olan alanlar.
+
+parameters:
+  # ============================================================================
+  # [STANDART] Musteri parametreleri (Kendi ortamına gore degistirilebilir)
+  # ============================================================================
+  image:
+    type: string
+    description: Makinenin kullanacagi isletim sistemi imaji
+    default: cirros
+  flavor:
+    type: string
+    description: Makinenin CPU/RAM boyutu
+    default: m1.tiny
+  network:
+    type: string
+    description: Makinenin baglanacagi ag
+    default: test-net
+
+  # [EKSTRA] Esik Deger Parametreleri
+  cpu_high_threshold:
+    type: number
+    description: Bu CPU yuzdesi asilirsa yeni makine acilir (Scale-Out)
+    default: 70
+  cpu_low_threshold:
+    type: number
+    description: Bu CPU yuzdesinin altina dusulurse fazla makine silinir (Scale-In)
+    default: 20
+
+resources:
+  # ============================================================================
+  # 1. AUTOSCALING GRUBU VE SANAL MAKINE TANIMI
+  # ============================================================================
+  asg:
+    type: OS::Heat::AutoScalingGroup
+    properties:
+      min_size: 1          # [AUTOHEALING]: Makine cokerse Heat otomatik 1'e tamamlar
+      max_size: 5          # En fazla kaca kadar buyuyebilecegi
+      desired_capacity: 1  # Ilk acilistaki makine sayisi
+      cooldown: 60         # Iki olcekleme arasi bekleme suresi (saniye)
+      resource:
+        type: OS::Nova::Server
+        properties:
+          name: my-workload-vm
+          image: { get_param: image }
+          flavor: { get_param: flavor }
+          networks:
+            - network: { get_param: network }
+
+          # --------------------------------------------------------------------
+          # >>> [EKSTRA 1: ZORUNLU METADATA] <<<
+          # Bu etiket OLMADAN sistem calismaz!
+          # KVM hipervizorundeki sanal makineyi Prometheus'taki Stack ID ile
+          # eslestiren sihirli anahtar budur.
+          # --------------------------------------------------------------------
+          metadata:
+            metering.server_group: { get_param: "OS::stack_id" }
+
+  # ============================================================================
+  # >>> [EKSTRA 2: ZORUNLU POLITIKALAR (SCALING POLICIES)] <<<
+  # Heat'in makineyi artirma ve azaltma kapilaridir.
+  # ============================================================================
+  scaleup_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      auto_scaling_group_id: { get_resource: asg }
+      adjustment_type: change_in_capacity
+      scaling_adjustment: 1  # 1 adet makine ekle
+      cooldown: 60
+
+  scaledown_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      auto_scaling_group_id: { get_resource: asg }
+      adjustment_type: change_in_capacity
+      scaling_adjustment: -1 # 1 adet makine sil
+      cooldown: 60
+
+  # ============================================================================
+  # >>> [EKSTRA 3: PROMETHEUS + AODH ALARMLARI] <<<
+  # Aodh'un Prometheus'a gidip PromQL sorgusu calistirdigi bolumdur.
+  # ============================================================================
+  cpu_alarm_high:
+    type: OS::Aodh::PrometheusAlarm
+    properties:
+      # [ZORUNLU]: repeat_actions true olmalidir, yoksa sadece ilk sefer calar
+      repeat_actions: true
+      description: "Ortalama CPU yukseldiginde makine ekle"
+      comparison_operator: gt
+      threshold: { get_param: cpu_high_threshold }
+      # [ZORUNLU SORGUR KALIBI]: str_replace ile stack_id otomatik gomulur
+      query:
+        str_replace:
+          template: "avg(rate(libvirt_domain_info_cpu_time_seconds_total[1m]) * 100 * on(domain) group_left(server_group) openstack_instance_server_group{server_group='MY_STACK_ID'})"
+          params:
+            MY_STACK_ID: { get_param: "OS::stack_id" }
+      # [ZORUNLU KAPI]: alarm_url kullanilmalidir (Token istemez, HMAC imzalidir)
+      alarm_actions:
+        - { get_attr: [scaleup_policy, alarm_url] }
+
+  cpu_alarm_low:
+    type: OS::Aodh::PrometheusAlarm
+    properties:
+      repeat_actions: true
+      description: "Ortalama CPU dustugunde fazla makineyi sil"
+      comparison_operator: lt
+      threshold: { get_param: cpu_low_threshold }
+      query:
+        str_replace:
+          template: "avg(rate(libvirt_domain_info_cpu_time_seconds_total[1m]) * 100 * on(domain) group_left(server_group) openstack_instance_server_group{server_group='MY_STACK_ID'})"
+          params:
+            MY_STACK_ID: { get_param: "OS::stack_id" }
+      alarm_actions:
+        - { get_attr: [scaledown_policy, alarm_url] }
+
+outputs:
+  # ============================================================================
+  # [STANDART CIKTILAR]: Musterinin panodan veya CLI'dan gormek isteyebilecegi degerler
+  # ============================================================================
+  current_group_size:
+    description: Anlik calisan toplam makine sayisi
+    value: { get_attr: [asg, current_size] }
+  scaleup_webhook:
+    description: Acil durumlarda disaridan elle de tetiklenebilecek imzali URL
+    value: { get_attr: [scaleup_policy, alarm_url] }
