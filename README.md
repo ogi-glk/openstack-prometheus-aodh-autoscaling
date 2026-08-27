@@ -240,6 +240,60 @@ cat /dev/zero > /dev/null &
 
 ---
 
+
+---
+
+## 9. How Customers Adapt Their Own Templates (Developer Guide)
+
+To integrate existing standard Heat Orchestration Templates into this architecture, users must append **3 mandatory blocks** to their template. A fully documented reference template is available at [`templates_heat/heat_template_user_guide.yaml`](templates_heat/heat_template_user_guide.yaml).
+
+### Block 1: Server Metadata Tagging
+Inside the `properties` of the `OS::Nova::Server` resource, add:
+```yaml
+          metadata:
+            metering.server_group: { get_param: "OS::stack_id" }
+```
+*This label allows the `server_group_exporter` to correlate raw KVM domain execution time with the customer's runtime Stack ID in Prometheus.*
+
+### Block 2: Scaling Policies
+Add scaling policies to the `resources` section:
+```yaml
+  scaleup_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      auto_scaling_group_id: { get_resource: asg }
+      adjustment_type: change_in_capacity
+      scaling_adjustment: 1
+      cooldown: 60
+
+  scaledown_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      auto_scaling_group_id: { get_resource: asg }
+      adjustment_type: change_in_capacity
+      scaling_adjustment: -1
+      cooldown: 60
+```
+
+### Block 3: Aodh Prometheus Alarms
+Declare `OS::Aodh::PrometheusAlarm` resources targeting the pre-signed `alarm_url`:
+```yaml
+  cpu_alarm_high:
+    type: OS::Aodh::PrometheusAlarm
+    properties:
+      repeat_actions: true
+      comparison_operator: gt
+      threshold: 70
+      query:
+        str_replace:
+          template: "avg(rate(libvirt_domain_info_cpu_time_seconds_total[1m]) * 100 * on(domain) group_left(server_group) openstack_instance_server_group{server_group='MY_STACK_ID'})"
+          params:
+            MY_STACK_ID: { get_param: "OS::stack_id" }
+      alarm_actions:
+        - { get_attr: [scaleup_policy, alarm_url] }
+```
+*Using `alarm_url` provides HMAC-SHA256 authenticated webhook invocation without requiring Keystone tokens.*
+
 ## License
 
 Distributed under the [Apache-2.0](LICENSE) License.

@@ -240,6 +240,60 @@ cat /dev/zero > /dev/null &
 
 ---
 
+
+---
+
+## 9. Müşteriler Kendi Şablonlarını Nasıl Uyarlar? (Geliştirici Rehberi)
+
+Müşterilerin mevcut standart Heat şablonlarını bu mimariye uyarlayabilmeleri için şablonlarına eklemeleri gereken **3 temel blok** vardır. Tam açıklamalı örnek şablona [`templates_heat/heat_template_user_guide.yaml`](templates_heat/heat_template_user_guide.yaml) dosyasından ulaşılabilir.
+
+### 1. Blok: Makine Tanımına Metadata Eklenmesi
+`OS::Nova::Server` kaynağının `metadata` bölümüne aşağıdaki satır eklenmelidir:
+```yaml
+          metadata:
+            metering.server_group: { get_param: "OS::stack_id" }
+```
+*Bu etiket, KVM hipervizöründeki vCPU metriklerinin Prometheus üzerinde müşterinin Stack ID'si ile filtrelenebilmesini sağlar.*
+
+### 2. Blok: Ölçekleme Politikalarının Eklenmesi
+Şablonun `resources` alanına büyütme ve küçültme politikaları eklenir:
+```yaml
+  scaleup_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      auto_scaling_group_id: { get_resource: asg }
+      adjustment_type: change_in_capacity
+      scaling_adjustment: 1
+      cooldown: 60
+
+  scaledown_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      auto_scaling_group_id: { get_resource: asg }
+      adjustment_type: change_in_capacity
+      scaling_adjustment: -1
+      cooldown: 60
+```
+
+### 3. Blok: Aodh Prometheus Alarmlarının Eklenmesi
+PromQL sorgusunu çalıştıracak ve politikaları tetikleyecek alarmlar eklenir:
+```yaml
+  cpu_alarm_high:
+    type: OS::Aodh::PrometheusAlarm
+    properties:
+      repeat_actions: true
+      comparison_operator: gt
+      threshold: 70
+      query:
+        str_replace:
+          template: "avg(rate(libvirt_domain_info_cpu_time_seconds_total[1m]) * 100 * on(domain) group_left(server_group) openstack_instance_server_group{server_group='MY_STACK_ID'})"
+          params:
+            MY_STACK_ID: { get_param: "OS::stack_id" }
+      alarm_actions:
+        - { get_attr: [scaleup_policy, alarm_url] }
+```
+*`alarm_url` kullanımı, OpenStack Keystone token kısıtlamalarına takılmaksızın HMAC-SHA256 imzası ile güvenli sinyal iletimi sağlar.*
+
 ## Lisans
 
 Bu proje [Apache-2.0](LICENSE) lisansı ile dağıtılmaktadır.
