@@ -1,22 +1,22 @@
-# OpenStack Prometheus + Aodh Autoscaling Katmanı
+# OpenStack Prometheus + Aodh Autoscaling Layer
 
-[Türkçe](README.md) | [English](README.en.md)
-
----
-
-Bu proje, OpenStack ortamlarında Ceilometer ve Gnocchi telemetri servislerine ihtiyaç duymadan, doğrudan **Prometheus** ve **OpenStack Aodh (`OS::Aodh::PrometheusAlarm`)** entegrasyonu üzerinden CPU tabanlı dinamik yatay otomatik ölçekleme (AutoScaling) sağlar.
-
-Tasarım, harici bir bildirim adaptörü veya Alertmanager webhook köprüsü gerektirmez. Alarm tanımları doğrudan Heat Orchestration Template (HOT YAML) içerisine tanımlanır. Aodh Evaluator servisi, Prometheus PromQL API'sini periyodik olarak sorgular; eşik değeri aşıldığında Aodh Notifier servisi kriptografik HMAC imzalı `alarm_url` üzerinden Heat CloudFormation API'sini tetikleyerek AutoScalingGroup kapasitesini günceller.
+[English](README.md) | [Türkçe](README.tr.md)
 
 ---
 
-## 1. Mimari ve Veri Akışı
+This project provides dynamic, CPU-based horizontal auto-scaling (AutoScaling) for OpenStack environments using native **Prometheus** and **OpenStack Aodh (`OS::Aodh::PrometheusAlarm`)** integration, eliminating dependencies on legacy Ceilometer and Gnocchi telemetry services.
+
+The design does not require external notification adapters or Alertmanager webhook bridges. Alarm definitions are declared directly within the Heat Orchestration Template (HOT YAML). The Aodh Evaluator periodically queries the Prometheus PromQL API; when thresholds are crossed, the Aodh Notifier dispatches HMAC-SHA256 pre-signed `alarm_url` signals directly to the Heat CloudFormation API to adjust AutoScalingGroup capacity.
+
+---
+
+## 1. Architecture and Data Flow
 
 ```text
 +-----------------------+         +-------------------------------+
 | libvirt-exporter      | :9177   | server-group-exporter         | :9102
-| KVM Domain CPU Süresi |         | Nova Metadata -> Stack ID     |
-| (instance-0000000X)   |         | (60s TTL Bellek Önbelleği)    |
+| KVM Domain CPU Time   |         | Nova Metadata -> Stack ID     |
+| (instance-0000000X)   |         | (60s TTL In-Memory Cache)     |
 +-----------+-----------+         +---------------+---------------+
             |                                     |
             +------------------+------------------+
@@ -24,16 +24,16 @@ Tasarım, harici bir bildirim adaptörü veya Alertmanager webhook köprüsü ge
                                v
                    +----------------------+
                    |   Prometheus TSDB    | :9090
-                   |  (Toplama ve Depolama|
+                   | (Scrape and Storage) |
                    +-----------+----------+
                                ^
-                               | HTTP GET /api/v1/query (Her 60s)
+                               | HTTP GET /api/v1/query (Every 60s)
                    +-----------+----------+
                    |    OpenStack Aodh    |
                    | * aodh-evaluator     |
                    | * aodh-notifier      |
                    +-----------+----------+
-                               | HTTP POST (HMAC-SHA256 İmzalı alarm_url)
+                               | HTTP POST (HMAC-SHA256 Signed alarm_url)
                                v
                    +----------------------+
                    |   Heat API (CFN)     | :8000
@@ -45,40 +45,40 @@ Tasarım, harici bir bildirim adaptörü veya Alertmanager webhook köprüsü ge
 
 ---
 
-## 2. Bileşen Analizi ve Sorumlulukları
+## 2. Component Analysis and Responsibilities
 
 ### A) `libvirt-exporter` (Port: 9177)
-* Standart `prometheus-libvirt-exporter` paketidir.
-* KVM hipervizöründen sanal makinelerin çekirdek seviyesindeki CPU kullanım sürelerini saniye cinsinden metrik olarak üretir (`libvirt_domain_info_cpu_time_seconds_total`).
-* OpenStack API bağımlılığı bulunmaz; yalnızca yerel libvirt domain adlarını (örneğin `instance-0000000d`) izler.
+* Standard `prometheus-libvirt-exporter` package.
+* Exposes kernel-level KVM vCPU execution time in seconds (`libvirt_domain_info_cpu_time_seconds_total`).
+* Operates without OpenStack dependencies, tracking only local libvirt domain names (e.g. `instance-0000000d`).
 
 ### B) `server_group_exporter` (Port: 9102)
-* KVM domain adları ile OpenStack Heat Stack ID (`metering.server_group`) arasındaki ilişkiyi kurar.
-* Nova API üzerinden sanal makineleri ait oldukları Heat Stack ID ile eşleştirir ve Prometheus formatında etiketli metrik sunar (`openstack_instance_server_group{domain="...", server_group="..."}`).
-* 60 saniyelik dahili TTL önbellekleme mekanizması sayesinde Nova API üzerindeki sorgu yükünü minimize eder ve Prometheus kazımalarına 1 ms altında yanıt verir.
+* Bridges local KVM domain names with OpenStack Heat Stack IDs (`metering.server_group`).
+* Queries Nova API to map instances to their respective Stack ID and produces Prometheus labeled metrics (`openstack_instance_server_group{domain="...", server_group="..."}`).
+* Uses an internal 60-second TTL cache to minimize Nova API overhead and respond to Prometheus scrapes in sub-millisecond latency.
 
-### C) Prometheus Sunucusu (Port: 9090)
-* Saf zaman serisi veritabanı (TSDB) ve PromQL sorgu motoru olarak görev yapar.
-* `:9177` ve `:9102` uç noktalarını kazıyarak verileri birleştirir.
-* Sistemde Alertmanager bulunmaz; sorgu değerlendirme süreci Aodh tarafından yürütülür.
+### C) Prometheus Server (Port: 9090)
+* Functions strictly as a Time-Series Database (TSDB) and PromQL query engine.
+* Scrapes and aggregates metrics from `:9177` and `:9102`.
+* Operates without Alertmanager; query evaluation is driven by Aodh.
 
 ### D) OpenStack Aodh (`OS::Aodh::PrometheusAlarm`)
-* `aodh-evaluator`, Heat şablonunda tanımlanan PromQL sorgusunu yapılandırılan aralıklarla (varsayılan: 60 saniye) Prometheus'a gönderir.
-* Belirlenen eşik değer aşıldığında (Scale-Out veya Scale-In), `aodh-notifier` servisi Heat'in önceden imzalanmış `alarm_url` adresine HTTP POST isteği gönderir.
-* `repeat_actions: true` parametresi ile alarm durumu sürdüğü müddetçe her periyotta sinyal iletilmeye devam eder.
+* `aodh-evaluator` submits PromQL queries defined in the Heat template to Prometheus at scheduled intervals (default: 60 seconds).
+* When thresholds are breached, `aodh-notifier` sends an HTTP POST request to Heat's pre-signed `alarm_url`.
+* Configured with `repeat_actions: true` to ensure periodic signal dispatching as long as the alarm state persists.
 
 ---
 
-## 3. Dinamik Stack İzolasyonu ve PromQL Enjeksiyonu
+## 3. Dynamic Stack Isolation and PromQL Injection
 
-Mimaride operatör veya kullanıcı tarafından manuel Stack ID tanımlaması yapılmaz. Heat, şablon işleme esnasında çalışma zamanı Stack ID bilgisini (`OS::stack_id`) `str_replace` fonksiyonu ile PromQL sorgusuna dinamik olarak enjekte eder:
+No manual Stack ID tracking is required by operators or end users. Heat injects its runtime Stack ID (`OS::stack_id`) into the PromQL query during stack synthesis using `str_replace`:
 
 ```yaml
 cpu_alarm_high:
   type: OS::Aodh::PrometheusAlarm
   properties:
     repeat_actions: true
-    description: "Stack ortalama CPU esigi asildiginda genisletme tetikle"
+    description: "Trigger scale-out when average CPU exceeds threshold"
     comparison_operator: gt
     threshold: 70
     query:
@@ -90,69 +90,69 @@ cpu_alarm_high:
       - { get_attr: [scaleup_policy, alarm_url] }
 ```
 
-Bu yapılandırma ile:
-1. Her Heat Stack'i yalnızca kendi altındaki sanal makinelerin metriklerini hesaplar.
-2. Eşzamanlı çalışan farklı Stack'ler arasında tam metrik ve tetikleme izolasyonu sağlanır.
-3. `alarm_url` kullanımı, OpenStack token süresi kısıtlamalarına takılmaksızın HMAC-SHA256 doğrulaması ile güvenli sinyal iletimi sağlar.
+Key operational guarantees:
+1. Each Heat Stack evaluates metrics exclusively for its own instances.
+2. Concurrent stacks maintain complete metric isolation and independent scaling decisions.
+3. Using `alarm_url` guarantees secure, token-independent HMAC-SHA256 webhook execution.
 
 ---
 
-## 4. Dizin ve Dosya Yapısı
+## 4. Directory Structure
 
 ```text
 openstack-prometheus-aodh-autoscaling/
-├── aodh-autoscaling.yml               # Ansible dağıtım playbook'u
-├── setup.sh                           # Bağımsız Bash kurulum betiği
-├── requirements.txt                   # Python paket bağımlılıkları
+├── aodh-autoscaling.yml               # Ansible deployment playbook
+├── setup.sh                           # Standalone Bash setup script
+├── requirements.txt                   # Python package dependencies
 │
 ├── defaults/
-│   └── main.yml                       # Varsayılan port ve konfigürasyon değişkenleri
+│   └── main.yml                       # Default ports and configuration variables
 │
 ├── tasks/
-│   ├── main.yml                       # Görev koordinasyon dosyası
-│   ├── prerequisites.yml              # Bağımlılık paketleri ve dizin hazırlığı
-│   ├── prometheus.yml                 # Standalone Prometheus kurulum adımları
-│   ├── exporter.yml                   # server_group_exporter kurulumu ve servisi
-│   └── aodh.yml                       # Aodh Prometheus ve Heat entegrasyon ayarları
+│   ├── main.yml                       # Task execution sequence
+│   ├── prerequisites.yml              # Prerequisites, packages, and directories
+│   ├── prometheus.yml                 # Standalone Prometheus setup tasks
+│   ├── exporter.yml                   # server_group_exporter service tasks
+│   └── aodh.yml                       # Aodh Prometheus and Heat integration tasks
 │
 ├── templates/
-│   ├── openrc.j2                      # Keystone kimlik doğrulama şablonu
-│   ├── prometheus.yml.j2              # Prometheus kazıma yapılandırması
+│   ├── openrc.j2                      # Keystone authentication template
+│   ├── prometheus.yml.j2              # Prometheus scrape configuration template
 │   └── server-group-exporter.service.j2
 │
 ├── handlers/
-│   └── main.yml                       # Servis yeniden başlatma tetikleyicileri
+│   └── main.yml                       # Service restart handlers
 │
 ├── exporters/
-│   └── server_group_exporter.py       # Nova Metadata -> Prometheus etiketleyicisi
+│   └── server_group_exporter.py       # Nova Metadata to Prometheus exporter
 │
 ├── configs/
-│   └── prometheus.yml                 # Örnek Prometheus konfigürasyonu
+│   └── prometheus.yml                 # Reference Prometheus configuration
 │
 └── templates_heat/
-    └── heat_template_aodh.yaml        # OS::Aodh::PrometheusAlarm içeren hazır HOT şablonu
+    └── heat_template_aodh.yaml        # Ready-to-deploy HOT template with OS::Aodh::PrometheusAlarm
 ```
 
 ---
 
-## 5. Kurulum Yöntemleri
+## 5. Deployment Methods
 
-### Yöntem 1: Ansible Rolü ile Dağıtım (Önerilen)
+### Method 1: Ansible Role Deployment (Recommended)
 
-OpenStack-Ansible veya bağımsız bir Ansible kontrol makinesinden:
+From OpenStack-Ansible or a standard Ansible control node:
 
 ```bash
 git clone https://github.com/ogi-glk/openstack-prometheus-aodh-autoscaling.git
 cd openstack-prometheus-aodh-autoscaling
 
 openstack-ansible aodh-autoscaling.yml
-# Veya:
+# Or:
 ansible-playbook -i hosts aodh-autoscaling.yml
 ```
 
-### Yöntem 2: Bağımsız Betik ile Dağıtım (`setup.sh`)
+### Method 2: Standalone Shell Script (`setup.sh`)
 
-Hedef ana makine (Compute/Controller) üzerinde doğrudan kurulum için:
+For direct deployment on the target host (Compute/Controller):
 
 ```bash
 cd openstack-prometheus-aodh-autoscaling
@@ -162,18 +162,18 @@ sudo bash setup.sh
 
 ---
 
-## 6. Servis Konfigürasyonu ve Sistem Uyumlulukları
+## 6. Service Configuration and Compatibility
 
-Kurulum sırasında aşağıdaki sistem ayarları otomatik olarak gerçekleştirilir:
+The installation automatically enforces the following system configurations:
 
-1. **Aodh İstemci Konfigürasyonu (`/etc/openstack/prometheus.yaml`):**
-   `observabilityclient` kütüphanesinin Prometheus sunucusuna erişebilmesi için gerekli host ve port tanımları oluşturulur:
+1. **Aodh Client Configuration (`/etc/openstack/prometheus.yaml`):**
+   Required by `observabilityclient` to discover the Prometheus query endpoint:
    ```yaml
    host: 127.0.0.1
    port: 9090
    ```
 
-2. **Aodh Servis Konfigürasyonu (`/etc/aodh/aodh.conf`):**
+2. **Aodh Service Configuration (`/etc/aodh/aodh.conf`):**
    ```ini
    [prometheus]
    host = 127.0.0.1
@@ -181,8 +181,8 @@ Kurulum sırasında aşağıdaki sistem ayarları otomatik olarak gerçekleştir
    url = http://127.0.0.1:9090
    ```
 
-3. **Heat CloudFormation API Kimlik Doğrulaması (`/etc/heat/heat.conf`):**
-   `alarm_url` üzerinden gelen AWS-v2/v4 HMAC imzalarının Keystone `/v3/ec2tokens` aracılığıyla doğrulanabilmesi için `[ec2authtoken]` servis kimlik bilgileri yapılandırılır:
+3. **Heat CloudFormation API Authentication (`/etc/heat/heat.conf`):**
+   Configures service credentials under `[ec2authtoken]` to allow Keystone `/v3/ec2tokens` validation of AWS HMAC-SHA256 signatures received on `alarm_url`:
    ```ini
    [ec2authtoken]
    auth_uri = http://<LB_VIP>:5000
@@ -195,51 +195,51 @@ Kurulum sırasında aşağıdaki sistem ayarları otomatik olarak gerçekleştir
    project_domain_id = default
    ```
 
-4. **Ubuntu 24.04 / Python 3.12 Uyumluluğu:**
-   SQLAlchemy 2.0 geçişinde oluşan `ExceptionContextImpl.chained_exception` hatası için geriye dönük uyumlu `osprofiler` yaması uygulanır.
+4. **Ubuntu 24.04 / Python 3.12 Compatibility:**
+   Applies a backward-compatible fix to `osprofiler` resolving `ExceptionContextImpl.chained_exception` failures encountered with SQLAlchemy 2.0.
 
 ---
 
-## 7. Doğrulama ve Test Adımları
+## 7. Verification and Testing
 
-### 1. Şablonu Kullanarak Stack Başlatma
+### 1. Launch a Stack
 ```bash
 openstack stack create -t templates_heat/heat_template_aodh.yaml aodh-autoscaling-stack
 ```
 
-### 2. Aodh Alarm Kayıtlarının Doğrulanması
+### 2. Verify Aodh Alarms
 ```bash
 openstack alarm list
 ```
-Oluşturulan alarmların `type: prometheus` ve `state: ok` veya `insufficient data` durumunda olduğu teyit edilir.
+Confirm that alarms appear with `type: prometheus`.
 
-### 3. Yük Testi ve Ölçekleme Doğrulaması
-Sanal makine konsolu üzerinden CPU tüketimi başlatılır:
+### 3. CPU Load Testing
+Connect to the instance and generate CPU load:
 ```bash
 cat /dev/zero > /dev/null &
 ```
 
-* Prometheus vCPU metrik artışını hesaplar.
-* `aodh-evaluator` eşik değerin aşıldığını belirleyerek alarm durumunu `ok -> alarm` olarak günceller.
-* `aodh-notifier`, Heat CloudFormation API'sine POST sinyali iletir ve HTTP 200 yanıtı alır.
-* Heat AutoScalingGroup yeni bir sanal makine başlatır (Scale-Out).
-* Yük durdurulduğunda (`killall cat`) CPU düşüşü ile `cpu_alarm_low` tetiklenir ve fazla makine silinir (Scale-In).
+* Prometheus records the vCPU spike.
+* `aodh-evaluator` flags the threshold breach and updates the alarm state to `alarm`.
+* `aodh-notifier` transmits the signal to Heat CFN, receiving HTTP 200 OK.
+* Heat AutoScalingGroup boots a new instance (Scale-Out).
+* Terminating the load (`killall cat`) drops the CPU, triggering `cpu_alarm_low` and automatically removing the additional instance (Scale-In).
 
 ---
 
-## 8. Mimari Karşılaştırma: Aodh vs Alertmanager
+## 8. Architectural Comparison: Aodh vs Alertmanager
 
-| Kriter | Alertmanager + Adaptör Modeli | Aodh + Prometheus Modeli |
+| Criterion | Alertmanager + Adapter Model | Aodh + Prometheus Model |
 | :--- | :--- | :--- |
-| **Alarm Tanım Yeri** | Prometheus `alert_rules.yml` dosyası | Heat Orchestration Template (HOT YAML) |
-| **Kullanıcı Modeli** | Altyapı yöneticisi müdahalesi gerektirir | Tamamen self-service kullanıcı şablonu |
-| **Tetikleme Yöntemi** | Webhook Push (Alertmanager) | Periyodik PromQL Değerlendirme (Aodh Pull) |
-| **Tepki Süresi** | ~15-30 saniye | ~60 saniye (Yapılandırılabilir evaluation_interval) |
-| **OpenStack Entegrasyonu** | Harici adaptör servisi gerektirir | Yerel OpenStack kaynak tipleri (`OS::Aodh::*`) |
-| **Sistem Kaynak İhtiyacı** | Düşük (Tek Python servisi) | Standart (Aodh servisleri kümesi) |
+| **Alarm Placement** | In Prometheus `alert_rules.yml` | In Heat Orchestration Template (HOT YAML) |
+| **User Experience** | Requires infrastructure admin changes | Fully self-service user template workflow |
+| **Trigger Mechanism** | Webhook Push (Alertmanager) | Periodic PromQL Evaluation (Aodh Pull) |
+| **Response Latency** | ~15-30 seconds | ~60 seconds (Configurable evaluation interval) |
+| **OpenStack Native** | Requires custom adapter service | Native OpenStack resource types (`OS::Aodh::*`) |
+| **Resource Overhead** | Low (Single lightweight daemon) | Standard (Aodh daemon set) |
 
 ---
 
-## Lisans
+## License
 
-Bu proje [Apache-2.0](LICENSE) lisansı ile dağıtılmaktadır.
+Distributed under the [Apache-2.0](LICENSE) License.
