@@ -34,4 +34,6 @@ port = {{ aodh_port }}
 host = 0.0.0.0
 
 [prometheus]
-url = {{ aodh_prometheus_url }}
+host = {{ aodh_prometheus_host | default('127.0.0.1') }}
+port = {{ aodh_prometheus_port | default(9090) }}
+url = {{ aodh_prometheus_url | default('http://127.0.0.1:9090') }}
