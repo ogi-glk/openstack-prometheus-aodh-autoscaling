@@ -147,3 +147,19 @@
   notify:
     - Restart aodh-evaluator
     - Restart aodh-notifier
+# 6. UBUNTU 24.04 / PYTHON 3.12 OSPROFILER SQLALCHEMY UYUMLULUK YAMASI
+- name: Apply backwards-compatible patch for osprofiler SQLAlchemy 2.0 chained_exception
+  ansible.builtin.shell: |
+    python3 -c "
+    import os
+    path = '/usr/lib/python3/dist-packages/osprofiler/sqlalchemy.py'
+    if os.path.exists(path):
+        with open(path, 'r') as f:
+            content = f.read()
+        old = 'chained_exception = str(exception_context.chained_exception)'
+        new = 'chained_exception = str(getattr(exception_context, \"chained_exception\", getattr(exception_context, \"original_exception\", \"\")))'
+        if old in content:
+            with open(path, 'w') as f:
+                f.write(content.replace(old, new))
+    "
+  failed_when: false
