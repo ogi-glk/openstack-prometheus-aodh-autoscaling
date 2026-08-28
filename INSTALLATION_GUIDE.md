@@ -270,6 +270,56 @@ The `setup.sh` script performs the same operations as the Ansible playbook:
 
 ## 5. Configuration Reference
 
+### Do I Need to Edit Any Configuration Files?
+
+All configuration files listed below are **automatically generated** by the deployment. Whether you need to manually adjust any variables depends on your environment:
+
+#### OpenStack-Ansible (OSA) Environments — No Manual Changes Required ✅
+
+The playbook automatically loads your existing credentials from:
+- `/etc/openstack_deploy/user_secrets.yml` — all service passwords
+- `/etc/openstack_deploy/user_variables.yml` — VIP addresses and environment settings
+
+All configuration files (Prometheus, Aodh, Heat CFN, observabilityclient) are populated from these sources. **Simply run the playbook and everything is configured automatically.**
+
+#### Standalone (Non-OSA) Environments — 6 Variables Must Be Set ⚠️
+
+If your OpenStack was **not** deployed using OpenStack-Ansible, the playbook does not have access to `user_secrets.yml`. You must provide your environment-specific values by editing `defaults/main.yml` before running the playbook, or by passing them via `--extra-vars` on the command line.
+
+**Required variables to set:**
+
+| Variable | Description | Default (Must Change) |
+|:--|:--|:--|
+| `openstack_password` | Keystone admin password | `''` (empty) |
+| `aodh_service_password` | Aodh Keystone service user password | `AodhSecretPassword123!` |
+| `aodh_db_password` | Aodh MariaDB database password | `AodhDbSecretPassword123!` |
+| `aodh_rabbit_password` | RabbitMQ message broker password | `RabbitSecretPassword123!` |
+| `heat_service_password` | Heat service password (for ec2authtoken) | `CHANGE_ME` |
+| `internal_lb_vip_address` | Controller or HAProxy VIP address | `172.29.236.101` |
+
+**Option A — Edit `defaults/main.yml` directly:**
+```bash
+cd openstack-prometheus-aodh-autoscaling
+vi defaults/main.yml
+# Update the 6 variables above to match your environment
+```
+
+**Option B — Pass variables on the command line:**
+```bash
+ansible-playbook -i inventory/hosts aodh-autoscaling.yml \
+  --extra-vars "openstack_password=MyAdminPass123 \
+                aodh_service_password=MyAodhPass123 \
+                aodh_db_password=MyAodhDbPass123 \
+                aodh_rabbit_password=MyRabbitPass123 \
+                heat_service_password=MyHeatPass123 \
+                internal_lb_vip_address=192.168.1.100"
+```
+
+> [!TIP]
+> After deployment, you generally do **not** need to edit the generated configuration files. If you need to tune specific parameters (e.g., Prometheus scrape interval, exporter cache TTL), modify the variables in `defaults/main.yml` and re-run the playbook — it will regenerate the configuration files automatically.
+
+---
+
 ### 5.1 Prometheus Configuration (`/etc/prometheus/prometheus.yml`)
 
 After deployment, Prometheus is configured to scrape two targets:
